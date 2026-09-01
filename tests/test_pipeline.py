@@ -27,7 +27,6 @@ def run(*args):
 
 @pytest.fixture(scope="session", params=SEEDS)
 def pipeline(request, tmp_path_factory):
-    """generate -> build -> reconcile, then pair each receipt with its true family"""
     out = tmp_path_factory.mktemp(f"seed{request.param}")
     run(ROOT / "generate_fake_data.py", out, "--seed", request.param)
     ledger = out / "fee_ledger.xlsx"
@@ -38,12 +37,21 @@ def pipeline(request, tmp_path_factory):
     fam = {r[0]: str(r[1] or "") for r in wb["Families"].iter_rows(min_row=4, values_only=True) if r[0]}
     rows = []
     for r in wb["Receipts"].iter_rows(min_row=4, values_only=True):
-        if r[0] is None: break
-        rows.append(dict(date=str(r[0])[:10], amount=round(float(r[1] or 0), 2), payer=str(r[2] or "").strip().upper()[:23],
-                         tier=r[8] or "", fid=r[9] or "", cands=str(r[10] or ""), why=str(r[11] or "")))
+        if r[0] is None:
+            break
+        rows.append(dict(
+            date=str(r[0])[:10],
+            amount=round(float(r[1] or 0), 2),
+            payer=str(r[2] or "").strip().upper()[:23],
+            tier=r[8] or "",
+            fid=r[9] or "",
+            cands=str(r[10] or ""),
+            why=str(r[11] or ""),
+        ))
     truth = defaultdict(list)
     for t in csv.DictReader(open(out / "ground_truth.csv")):
-        truth[(str(t["date"])[:10], round(float(t["amount"]), 2), t["payer"].strip().upper()[:23])].append(t)
+        key = (str(t["date"])[:10], round(float(t["amount"]), 2), t["payer"].strip().upper()[:23])
+        truth[key].append(t)
     pairs = []
     for g in rows:
         bucket = truth[(g["date"], g["amount"], g["payer"])]
@@ -76,7 +84,6 @@ def test_a_clean_reference_always_allocates(pipeline):
 
 
 def test_a_reference_that_contradicts_the_payer_name_is_held_back(pipeline):
-    """the typo case: a valid reference belonging to someone else must never allocate silently"""
     for g, t in pipeline["pairs"]:
         if t["failure_mode"].startswith("wrong_ref") and g["tier"] in AUTO_TIERS:
             assert correct(pipeline["fam"], g["fid"], t["true_family"]), f"followed a wrong reference: {g}"
@@ -101,8 +108,6 @@ def test_every_queued_receipt_carries_a_reason(pipeline):
 
 
 def test_the_fee_rules_reproduce_the_invoices(pipeline):
-    """expected fee is computed from Rates; it must agree with what the roster invoiced,
-    except for the deliberate defect the generator plants"""
     ch = pipeline["wb"]["Children"]
     checks = [r for r in ch.iter_rows(min_row=4, values_only=True) if r[0] and r[5] == "Enrolled"]
     assert checks
@@ -111,7 +116,6 @@ def test_the_fee_rules_reproduce_the_invoices(pipeline):
 
 
 def test_no_money_disappears(pipeline):
-    """allocated + queued + outflows must equal the bank total"""
     total = sum(g["amount"] for g, _ in pipeline["pairs"])
     allocated = sum(g["amount"] for g, _ in pipeline["pairs"] if g["tier"] in AUTO_TIERS)
     queued = sum(g["amount"] for g, _ in pipeline["pairs"] if g["tier"] not in AUTO_TIERS)

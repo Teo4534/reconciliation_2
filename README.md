@@ -19,7 +19,7 @@ none is allocated to the wrong family.** The remaining 11 go to a review queue.
 ![The Position sheet](examples/position_sheet.png)
 
 No real data appears anywhere in this repository. `generate_fake_data.py` produces a fictional
-roster and bank export that reproduce the failure patterns, not the records — which also means
+roster and bank export that reproduce the failure patterns, not the records, which also means
 every line has a known correct answer, so accuracy can be measured rather than asserted.
 
 ## Run it
@@ -51,7 +51,7 @@ assigned and the reason it recorded.
 | a child's name only | `ZORA VANTERPOOL     Halima` | B | surname VANTERPOOL |
 | second instalment | `GENEVIEVE MAALOUF   2nd payment` | A | payer name previously seen with a verified reference for this family |
 | last term's reference | `MARGIT PELLETIER    2025-627` | D | several families fit: FAM-042 (surname PELLETIER); FAM-045 (surname PELLETIER) |
-| **someone else's reference** | `MARGIT RASMUSSEN    2026-039` | X | reference 2026-039 points to FAM-049 but the memo names FAM-048 — parent may have typed the wrong invoice number |
+| **someone else's reference** | `MARGIT RASMUSSEN    2026-039` | X | reference 2026-039 points to FAM-049 but the memo names FAM-048, parent may have typed the wrong invoice number |
 
 The last row is the case that matters. A naive matcher follows the reference, credits the wrong
 family, and produces two errors at once: one parent chased for money they paid, another marked
@@ -65,18 +65,18 @@ Ranked evidence, first hit wins.
 | tier | evidence | allocated? |
 |---|---|---|
 | M | a person typed a family ID into the override column | yes |
-| A | current-term invoice reference naming exactly one family, uncontradicted by the memo — or a payer name already seen with a verified reference | yes |
+| A | current-term invoice reference naming exactly one family, uncontradicted by the memo, or a payer name already seen with a verified reference | yes |
 | B | exactly one roster surname appears in the memo | yes |
 | C | fuzzy evidence: a truncated or misspelt surname, or a child's first name | review |
 | D | nothing usable, or several families fit | review |
 | X | the reference and the payer name point to different families | review |
 
 Two things do most of the work. **Aliasing**: confirm a payer once, by reference or by hand, and
-every later payment from that account follows, including ones with no reference at all — which is
+every later payment from that account follows, including ones with no reference at all, which is
 how second instalments get matched. **Refusing to guess**: tiers C, D and X are held back with
 their candidates and reasoning, so a person spends their time on the 14% that need judgement.
 
-Every reason string is a template, not a generated sentence — each rule that fires appends a fixed
+Every reason string is a template, not a generated sentence. Each rule that fires appends a fixed
 phrase. The same input always produces the same allocation and the same explanation, which is what
 makes the output auditable.
 
@@ -113,15 +113,15 @@ zero misallocations across three independently generated datasets.
 `build_ledger.py` writes a workbook rather than a database, because the people who use it live in
 spreadsheets and need to see what happened.
 
-- **Position** — one row per family: expected, received, balance, status, every bank reference they
+- **Position**: one row per family: expected, received, balance, status, every bank reference they
   used, and a plain-English flag such as *£520.50 tagged AUT-2025 looks like a JAN-2026 payment*.
   Green settled, red owing, amber check before chasing.
-- **Review** — the only sheet needing a human. Decide, type the family ID into `Receipts` column F,
+- **Review**: the only sheet needing a human. Decide, type the family ID into `Receipts` column F,
   re-run `reconcile.py`.
-- **Receipts** — every bank line and what the engine did with it.
-- **Children / Families** — the roster, with each child's fee computed from the rules and compared
+- **Receipts**: every bank line and what the engine did with it.
+- **Children / Families**: the roster, with each child's fee computed from the rules and compared
   against what was actually invoiced, so mis-invoiced pupils surface automatically.
-- **Rates / Terms** — the fee rules as data. A price change is a cell edit; nothing is hard-coded.
+- **Rates / Terms**: the fee rules as data. A price change is a cell edit; nothing is hard-coded.
 
 Two structural decisions worth explaining, because they came out of the real data:
 
@@ -131,7 +131,7 @@ invoice numbers hang off it.
 
 **Fee rules are data, not code.** Sibling tiers, session counts, registration and supplies charges
 live in `Rates` and `Terms`. Running the rules against the invoices as a check found a pupil billed
-£18 for supplies instead of £25 — an error nobody had spotted.
+£18 for supplies instead of £25, an error nobody had spotted.
 
 ## Limitations
 

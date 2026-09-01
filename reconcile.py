@@ -1,15 +1,12 @@
 """
-reconcile.py — allocation engine and arrears for fee_ledger_2026.xlsx
+reconcile.py  -  allocation engine and arrears for fee_ledger_2026.xlsx
 
 Reads the ledger built by build_ledger.py, decides which family each bank receipt belongs to,
 writes the decision (with a confidence tier and the reasoning) into the Receipts sheet, and adds
-three sheets: Position (one row per family: owed, received, balance), Review (what a human must decide)
-and Summary.
+three sheets: Review (what a human must decide), Arrears (who owes what, with warnings) and Summary.
 
-    python reconcile.py <ledger.xlsx>
-
-Tiers — highest evidence first, first hit wins:
-  M  manual override typed into Receipts column F          -> allocated
+Tiers  -  highest evidence first, first hit wins:
+  M  manual override typed into Receipts column M          -> allocated
   A  current-term invoice reference naming exactly one family, not contradicted by a surname
      in the memo; OR a bank payer name already seen with a verified reference (alias)   -> allocated
   B  exactly one roster surname found in the memo                                       -> allocated
@@ -119,9 +116,9 @@ def decide(text, source=""):
         else: return "D", "", pool, ("several families fit: " + "; ".join(f"{f} ({', '.join(sorted(set(ev[f])))})" for f in sorted(pool)) + source)
     else: tie = False
     f = winners[0]; why = ", ".join(sorted(set(ev[f]))) + source
-    if tie: return "C", "", {f}, why + " — chosen over " + ", ".join(sorted(pool - {f})) + " because only this family is billed this term"
+    if tie: return "C", "", {f}, why + "  -  chosen over " + ", ".join(sorted(pool - {f})) + " because only this family is billed this term"
     if f in exact and (len(pool) == 1 or top >= 2): return "B", f, set(), why
-    return "C", "", {f}, why + (" — other fits: " + ", ".join(sorted(pool - {f})) if len(pool) > 1 else "")
+    return "C", "", {f}, why + ("  -  other fits: " + ", ".join(sorted(pool - {f})) if len(pool) > 1 else "")
 AUT_BASE, JAN_BASE = [214.5, 379.5, 506.0], [409.5, 724.5, 966.0]     # 11 and 21 sessions x sibling tiers
 def amount_pattern(amount):
     for base, label in ((AUT_BASE, f"{TERM_PRIOR} amount"), (JAN_BASE, f"{TERM_CUR} amount")):
@@ -170,7 +167,7 @@ for x in rows:
             if memo_fams and cand not in memo_fams:
                 x["tier"], x["cands"], x["why"] = "X", memo_fams | {cand}, (
                     f"reference {x['cur_ref']} points to {cand} but the memo names " + ", ".join(sorted(memo_fams)) +
-                    " — parent may have typed the wrong invoice number")
+                    "  -  parent may have typed the wrong invoice number")
             else:
                 x["tier"], x["fid"], x["why"] = "A", cand, f"invoice reference {x['cur_ref']}"
                 alias[payer_key(x["payer"])].add(cand)
@@ -194,7 +191,7 @@ for x in rows:
         x["tier"], x["fid"], x["cands"] = tier, fid, cands
         x["why"] = (x["why"] + "; " if x["why"] else "") + why
     if x["prior_ref"] and x["tier"] in ("A", "B", "C") :
-        x["why"] += f" (prior-term reference {x['prior_ref']} — family identified, invoice not loaded)"
+        x["why"] += f" (prior-term reference {x['prior_ref']}  -  family identified, invoice not loaded)"
 for x in rows:
     x["amt"] = amount_check(x["amount"], x["fid"] or (next(iter(x["cands"])) if len(x["cands"]) == 1 else ""), x["term"])
 
@@ -225,7 +222,7 @@ for r in range(4, wf.max_row + 1):
 for name in ("Review", "Arrears", "Position", "Summary"):
     if name in wb.sheetnames: del wb[name]
 wr = wb.create_sheet("Review")
-put(wr, 1, 1, "Review queue — receipts the engine would not allocate. Decide, then type the family ID into Receipts column M (row shown) and re-run.", TITLE)
+put(wr, 1, 1, "Review queue  -  receipts the engine would not allocate. Decide, then type the family ID into Receipts column M (row shown) and re-run.", TITLE)
 header(wr, 3, ["Row in Receipts", "Date", "Amount", "Payer (bank)", "Reference (bank)", "Term", "Tier", "Most likely family", "Why the engine stopped", "Amount check", "That family's expected fee"])
 queue = sorted([x for x in rows if x["tier"] not in AUTO_TIERS], key=lambda x: (-abs(x["amount"])))
 for i, x in enumerate(queue):
@@ -247,7 +244,7 @@ wr.conditional_formatting.add(f"A4:K{lastq}", FormulaRule(formula=['$G4="D"'], f
 
 # ------------------------------------------------------------------ Position sheet (the answer sheet)
 wp = wb.create_sheet("Position")
-put(wp, 1, 1, f"Position — {TERM_CUR}. One row per family. Green = settled. Red = owing. Amber = check the last two columns before chasing.", TITLE)
+put(wp, 1, 1, f"Position  -  {TERM_CUR}. One row per family. Green = settled. Red = owing. Amber = check the last two columns before chasing.", TITLE)
 put(wp, 2, 1, "Report date"); put(wp, 2, 2, REPORT_DATE, BLUE, "dd/mm/yyyy")
 header(wp, 4, ["Family ID", "Family", "Children", "Invoice no(s)", "Expected", "Received", "Balance", "Status",
                "Receipts", "Last payment", "Days", "References used (bank)", "Needs a look"])
@@ -302,16 +299,16 @@ wp.freeze_panes = "C5"; wp.auto_filter.ref = f"A4:M{last_p}"
 
 # ------------------------------------------------------------------ Summary
 wsum = wb.create_sheet("Summary")
-put(wsum, 1, 1, "Summary — all formulas", TITLE)
+put(wsum, 1, 1, "Summary  -  all formulas", TITLE)
 RB, RI = "Receipts!$B$4:$B$600", "Receipts!$E$4:$E$600"
 RP, RO = "Receipts!$I$4:$I$600", "Receipts!$H$4:$H$600"
 items = [("Receipts", None, None),
          ("Bank lines", f'=COUNT({RB})', "0"), ("Money in", f'=SUMIF({RB},">0")', GBP), ("Money out (refunds / outflows)", f'=SUMIF({RB},"<0")', GBP),
-         (f"Money in — {TERM_PRIOR}", f'=SUMIFS({RB},{RI},"{TERM_PRIOR}",{RB},">0")', GBP),
-         (f"Money in — {TERM_CUR}", f'=SUMIFS({RB},{RI},"{TERM_CUR}",{RB},">0")', GBP),
+         (f"Money in  -  {TERM_PRIOR}", f'=SUMIFS({RB},{RI},"{TERM_PRIOR}",{RB},">0")', GBP),
+         (f"Money in  -  {TERM_CUR}", f'=SUMIFS({RB},{RI},"{TERM_CUR}",{RB},">0")', GBP),
          ("", None, None), ("Allocation by tier (all terms)", None, None)]
-for t, label in [("M", "M — manual override"), ("A", "A — reference or verified payer alias"), ("B", "B — unique surname in memo"),
-                 ("C", "C — fuzzy / first name (review)"), ("D", "D — nothing usable or ambiguous (review)"), ("X", "X — reference contradicts memo (review)")]:
+for t, label in [("M", "M  -  manual override"), ("A", "A  -  reference or verified payer alias"), ("B", "B  -  unique surname in memo"),
+                 ("C", "C  -  fuzzy / first name (review)"), ("D", "D  -  nothing usable or ambiguous (review)"), ("X", "X  -  reference contradicts memo (review)")]:
     items.append((label + "  [lines]", f'=COUNTIF({RP},"{t}")', "0"))
     items.append((label + "  [£ in]", f'=SUMIFS({RB},{RP},"{t}",{RB},">0")', GBP))
 items += [("Lines allocated automatically", f'=COUNTIF({RO},"yes")', "0"),
@@ -319,7 +316,7 @@ items += [("Lines allocated automatically", f'=COUNTIF({RO},"yes")', "0"),
           (f"{TERM_CUR} money in allocated", f'=SUMIFS({RB},{RI},"{TERM_CUR}",{RO},"yes",{RB},">0")', GBP),
           (f"{TERM_CUR} money in awaiting review", f'=SUMIFS({RB},{RI},"{TERM_CUR}",{RO},"",{RB},">0")', GBP),
           ("Lines in Review queue", '=COUNTA(Review!$A$4:$A$600)', "0"),
-          ("", None, None), (f"Position — {TERM_CUR}", None, None),
+          ("", None, None), (f"Position  -  {TERM_CUR}", None, None),
           ("Expected income (rules)", '=SUM(Position!$E$5:$E$600)', GBP), ("Received (allocated)", '=SUM(Position!$F$5:$F$600)', GBP),
           ("Outstanding", '=SUMIF(Position!$G$5:$G$600,">0")', GBP),
           ("Families settled", '=COUNTIF(Position!$H$5:$H$600,"settled")', "0"), ("Families part paid", '=COUNTIF(Position!$H$5:$H$600,"part paid")', "0"),
