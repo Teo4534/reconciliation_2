@@ -1,10 +1,6 @@
 # Fee reconciliation
 
-A small charity invoices termly school fees and receives them by bank transfer. The bank memo is
-the only link between a payment and an invoice, and most of the time that link is broken: parents
-mistype the reference, reuse last term's, run it together with their name, or send nothing but a
-surname. Families with several children pay one combined invoice, often in instalments, sometimes
-from an account in a different name.
+Reconciliation exists so that no family is chased for money they have paid, and no unpaid balance goes unnoticed until year end. The bank memo is the only link between a payment and an invoice, and most of the time that link is broken: parents mistype the reference, reuse last term's, run it together with their name, or send nothing but a surname. Families with several children pay one combined invoice, often in instalments, sometimes from an account in a different name. At a small roll one person can fix the exceptions by hand. As the school grows the exceptions become the bulk of the work, and a VLOOKUP needs a clean key, which the reference never is.
 
 The result is that nobody can answer "who still owes us money?" without a day of manual work, so
 it gets done once a term and part-payments go unnoticed until year end.
@@ -18,8 +14,8 @@ none is allocated to the wrong family.** The remaining 11 go to a review queue.
 
 ![The Position sheet](examples/position_sheet.png)
 
-No real data appears anywhere in this repository. `generate_fake_data.py` produces a fictional
-roster and bank export that reproduce the failure patterns, not the records, which also means
+No real data appears anywhere in this repository. `generate_fake_data.py` is a fictional
+roster and bank export that reproduce the failure patterns, which also means
 every line has a known correct answer, so accuracy can be measured rather than asserted.
 
 ## Run it
@@ -36,11 +32,11 @@ pytest -q                                                  # 10 tests across 3 g
 
 ## What the bank actually sends
 
-The memo is a fixed-width field: 23 characters of payer name, then a 21-character reference slot
+The memo is a fixed-width field with 23 characters of payer name, then a 21-character reference slot
 that silently truncates. Every row below is real output from `examples/`, with the tier the engine
 assigned and the reason it recorded.
 
-| what went wrong | bank memo | tier | engine reason |
+| issue | bank memo | tier | reason |
 |---|---|---|---|
 | nothing | `MARGIT WENDELIN     2026-047` | A | invoice reference 2026-047 |
 | glued to the name | `GENEVIEVE MAALOUF   MAALOU2026-030` | A | invoice reference 2026-030 |
@@ -54,8 +50,8 @@ assigned and the reason it recorded.
 | **someone else's reference** | `MARGIT RASMUSSEN    2026-039` | X | reference 2026-039 points to FAM-049 but the memo names FAM-048, parent may have typed the wrong invoice number |
 
 The last row is the case that matters. A naive matcher follows the reference, credits the wrong
-family, and produces two errors at once: one parent chased for money they paid, another marked
-paid when they haven't. The engine refuses to allocate when the reference and the payer name
+family, one parent chased for money they paid and another isi incorrectly marked
+as having been paid. The engine refuses to allocate when the reference and the payer name
 disagree, and says so.
 
 ## How a receipt gets a family
@@ -133,16 +129,16 @@ invoice numbers hang off it.
 live in `Rates` and `Terms`. Running the rules against the invoices as a check found a pupil billed
 £18 for supplies instead of £25, an error nobody had spotted.
 
-## Limitations
+## Future work
 
-- First-name matching only works while a first name is unique on the roster; a second child with
-  the same name silently drops it to tier D.
+- First name matching only works while a first name is unique on the roster; a second child with
+  the same name drops it to tier D.
 - Aliasing assumes one bank account belongs to one family. It held on the data tested, but a
-  grandparent paying for two families would break it.
+  grandparent paying for two families would break it. 
 - Ageing runs from the term start, not from invoice date, because invoice dates were not available.
 - A term whose invoice register has not been loaded can have its receipts identified by family but
-  not reconciled against an invoice; those are flagged, not silently ignored.
-- Amounts are not used as matching evidence, only as a sanity check shown to the reviewer.
+  not reconciled against an invoice, those are flagged.
+- Amounts are not used as matching evidence, but only as a sanity check for later review
 
 ## Files
 
