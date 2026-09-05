@@ -7,8 +7,8 @@ so a change to the matching logic that starts crediting the wrong family fails t
 The guarantee being protected is precision, not coverage: it is fine for the engine to send more
 lines to a human, and never fine for it to allocate one to the wrong family.
 """
-import csv, subprocess, sys
-from collections import defaultdict
+import csv, re, subprocess, sys, unicodedata
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import pytest
@@ -17,6 +17,12 @@ from openpyxl import load_workbook
 ROOT = Path(__file__).resolve().parent.parent
 AUTO_TIERS = {"M", "A", "B"}
 SEEDS = [20260101, 7, 99]
+# generate_fake_data.py:97 always bills one child 18.00 for supplies instead of 25.00.
+PLANTED_SUPPLIES_ERROR = 7.00
+# That planted error, plus any family invoiced at a sibling tier it no longer qualifies for
+# because a child left. How many of those exist depends on the seed's enrolment, so this is a
+# ceiling. A fee engine that is actually broken misses most of the roster, not a handful.
+MAX_FEE_MISMATCHES = 5
 
 
 def run(*args):
@@ -60,10 +66,20 @@ def pipeline(request, tmp_path_factory):
     return dict(wb=wb, fam=fam, pairs=pairs, seed=request.param)
 
 
+def norm_family(s):
+    s = unicodedata.normalize("NFKD", str(s or ""))
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", s.upper().replace(" / ", "-").replace("/", "-")).strip()
+
+
 def correct(fam, fid, true_family):
-    have = fam.get(fid, "").upper().replace(" / ", "-")
-    want = true_family.upper()
-    return bool(fid) and (want in have or have in want)
+    """Exact match on the family name, never substring.
+
+    MARCHETTI is a substring of ACHTERBERG-MARCHETTI and they are unrelated families, so a
+    substring test cannot see a receipt credited from one to the other - which is the precise
+    error this whole suite exists to catch.
+    """
+    return bool(fid) and norm_family(fam.get(fid, "")) == norm_family(true_family)
 
 
 def test_no_receipt_is_credited_to_the_wrong_family(pipeline):
@@ -107,12 +123,72 @@ def test_every_queued_receipt_carries_a_reason(pipeline):
             assert g["why"].strip(), f"no reason given for a queued receipt: {g}"
 
 
+def fee_inputs(wb):
+    """The fee rules as the workbook states them, so this test checks the wiring and not a copy."""
+    rates, terms = wb["Rates"], wb["Terms"]
+    return dict(
+        sibling_rate={n: rates.cell(row=3 + n, column=3).value for n in (1, 2, 3, 4)},
+        wednesday_rate=rates.cell(row=9, column=3).value,
+        reg_fee=rates.cell(row=11, column=3).value,
+        supplies_fee=rates.cell(row=12, column=3).value,
+        sessions={"Saturday": terms.cell(row=5, column=3).value,
+                  "Wednesday": terms.cell(row=5, column=4).value},
+    )
+
+
+def expected_charge(row, siblings, f):
+    """Recompute a child's expected fee in Python from the static columns.
+
+    Columns I, K, L, M, R and T on the Children sheet are Excel formulas. openpyxl writes them
+    without a cached value, so reading them with data_only=True yields None and any assertion
+    over them is vacuous. Only the blue input columns are safe to read.
+    """
+    cls = row[4]
+    n = row[9] if isinstance(row[9], (int, float)) else f["sessions"][cls]
+    if siblings == 0:
+        rate = 0.0
+    elif cls == "Wednesday":
+        rate = f["wednesday_rate"]
+    else:
+        rate = f["sibling_rate"][min(siblings, 4)] / siblings
+    addons = str(row[14] or "")
+    return round(
+        round(rate * n, 2)
+        - (row[13] or 0.0)
+        + (f["reg_fee"] if "reg" in addons else 0.0)
+        + (f["supplies_fee"] if "supplies" in addons else 0.0),
+        2,
+    )
+
+
 def test_the_fee_rules_reproduce_the_invoices(pipeline):
     ch = pipeline["wb"]["Children"]
-    checks = [r for r in ch.iter_rows(min_row=4, values_only=True) if r[0] and r[5] == "Enrolled"]
-    assert checks
-    flagged = [r for r in checks if isinstance(r[19], (int, float)) and abs(r[19]) >= 0.02]
-    assert len(flagged) <= 2, f"fee rules disagree with {len(flagged)} invoices"
+    enrolled = [r for r in ch.iter_rows(min_row=4, values_only=True) if r[0] and r[5] == "Enrolled"]
+    assert enrolled
+    f = fee_inputs(pipeline["wb"])
+    assert f["sibling_rate"][1] and f["wednesday_rate"] and f["sessions"]["Saturday"], \
+        "fee inputs missing from Rates/Terms - the rules are not readable as data"
+
+    siblings = Counter(r[1] for r in enrolled)
+    mismatched = []
+    for r in enrolled:
+        invoiced = r[18]
+        assert isinstance(invoiced, (int, float)), f"{r[0]} is enrolled with no invoiced amount"
+        want = expected_charge(r, siblings[r[1]], f)
+        if abs(want - invoiced) >= 0.02:
+            mismatched.append((r[0], want, invoiced))
+
+    # The rules must reproduce essentially every invoice. A fee engine that has been broken -
+    # a flat rate, a dropped sibling tier, the wrong session count - mismatches most of the roster,
+    # so the ceiling is what gives this test teeth.
+    assert len(mismatched) <= MAX_FEE_MISMATCHES, \
+        f"fee rules disagree with {len(mismatched)} of {len(enrolled)} invoices: {mismatched[:5]}"
+
+    # generate_fake_data.py:97 always bills one child 18.00 for supplies instead of 25.00. If that
+    # stops being found, the check has quietly stopped checking - which is how this test used to
+    # pass while asserting nothing.
+    assert any(abs((want - got) - PLANTED_SUPPLIES_ERROR) < 0.01 for _, want, got in mismatched), \
+        f"the planted {PLANTED_SUPPLIES_ERROR:.2f} supplies error was not detected: {mismatched}"
 
 
 def test_no_money_disappears(pipeline):

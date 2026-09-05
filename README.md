@@ -21,12 +21,12 @@ every line has a known correct answer, so accuracy can be measured rather than a
 ## Run it
 
 ```bash
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 
-python generate_fake_data.py examples --seed 20260101      # roster.xlsx, bank.xlsx, ground_truth.csv
-python build_ledger.py examples/roster.xlsx examples/bank.xlsx examples/fee_ledger.xlsx
-python reconcile.py examples/fee_ledger.xlsx               # allocates, writes Position / Review / Summary
-python score.py                                            # measures the result against ground truth
+python3 generate_fake_data.py examples --seed 20260101      # roster.xlsx, bank.xlsx, ground_truth.csv
+python3 build_ledger.py examples/roster.xlsx examples/bank.xlsx examples/fee_ledger.xlsx
+python3 reconcile.py examples/fee_ledger.xlsx               # allocates, writes Position / Review / Summary
+python3 score.py                                            # measures the result against ground truth
 ./check.sh                                                 # unit tests, end-to-end on 3 seeds, precision gate
 ```
 

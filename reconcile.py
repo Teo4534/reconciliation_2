@@ -54,16 +54,19 @@ def write_outputs(wb, rows, roster, cfg, report_date):
     AUTO_TIERS, TERM_CUR, TERM_PRIOR, REPORT_DATE = cfg.auto_tiers, cfg.term_cur, cfg.term_prior, report_date
     fam_name, expected, billed = roster.fam_name, roster.expected, roster.billed
 
-    # ------------------------------------------------------------------ write engine columns (P..T)
+    # --------------------------------------------- write engine columns (I..M: tier..amount check)
+    # Flags (N) and Full memo (O) belong to build_ledger.py and are left alone. Writing the amount
+    # check into N used to overwrite the bank diagnostics it had put there.
     for x in rows:
         r = x.r
         put(ws, r, 9, x.tier, GREEN)
         put(ws, r, 10, x.fid if x.tier in AUTO_TIERS else "", GREEN)
         put(ws, r, 11, ", ".join(sorted(x.cands)) if x.cands else "", GREEN)
-        put(ws, r, 12, x.why, GREEN); put(ws, r, 13, ("; ".join(y for y in [x.amt, amount_pattern(x.amount, cfg)] if y and y != "n/a")) or (ws.cell(r, 13).value or ""), GREEN)
+        put(ws, r, 12, x.why, GREEN)
+        put(ws, r, 13, "; ".join(y for y in [x.amt, amount_pattern(x.amount, cfg)] if y and y != "n/a"), GREEN)
     for x in rows:
         fill = AMBER if x.tier == "X" else (GREEN_L if x.tier in AUTO_TIERS else AMBER_L)
-        for c in range(1, 15): ws.cell(x.r, c).fill = fill
+        for c in range(1, 16): ws.cell(x.r, c).fill = fill
     last_rc = rows[-1].r
     ws.conditional_formatting.add(f"A4:N{last_rc}", FormulaRule(formula=['$I4="X"'], fill=AMBER, font=Font(name=F, size=10, color="9C5700")))
     ws.conditional_formatting.add(f"A4:N{last_rc}", FormulaRule(formula=['AND($H4="",$I4<>"X")'], fill=AMBER_L))
@@ -81,7 +84,7 @@ def write_outputs(wb, rows, roster, cfg, report_date):
     for name in ("Review", "Arrears", "Position", "Summary"):
         if name in wb.sheetnames: del wb[name]
     wr = wb.create_sheet("Review")
-    put(wr, 1, 1, "Review queue  -  receipts the engine would not allocate. Decide, then type the family ID into Receipts column M (row shown) and re-run.", TITLE)
+    put(wr, 1, 1, "Review queue  -  receipts the engine would not allocate. Decide, then type the family ID into Receipts column F (row shown) and re-run.", TITLE)
     header(wr, 3, ["Row in Receipts", "Date", "Amount", "Payer (bank)", "Reference (bank)", "Term", "Tier", "Most likely family", "Why the engine stopped", "Amount check", "That family's expected fee"])
     queue = sorted([x for x in rows if x.tier not in AUTO_TIERS], key=lambda x: (-abs(x.amount)))
     for i, x in enumerate(queue):

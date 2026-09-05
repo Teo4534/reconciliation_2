@@ -349,8 +349,9 @@ ws.conditional_formatting.add(f"A4:V{last}", FormulaRule(formula=[f'$U4="CHECK"'
 # ---- Receipts
 ws = wb.create_sheet("Receipts")
 put(ws, 1, 1, "Receipts  -  one row per bank line. Blue = from the bank file. Yellow = your decision. Everything else is written by the engine.", TITLE)
+# Columns 9-13 are written by reconcile.py; column 10 is what $G and $J below read back.
 header(ws, 3, ["Date", "Amount", "Payer (bank)", "Reference (bank)", "Term", "Family override (fill in)", "Family",
-               "Allocated", "Tier", "Candidates", "Why", "Amount check", "Flags", "Full memo"])
+               "Allocated", "Tier", "Family (engine)", "Candidates", "Why", "Amount check", "Flags", "Full memo"])
 for i, r in rc.iterrows():
     row = 4 + i
     put(ws, row, 1, r.date, BLUE, "dd/mm/yyyy"); put(ws, row, 2, r.amount, BLUE, GBP)
@@ -358,9 +359,9 @@ for i, r in rc.iterrows():
     put(ws, row, 6, "", fill=Y_FILL)
     put(ws, row, 7, f'=IF($F{row}<>"",$F{row},$J{row})')
     put(ws, row, 8, f'=IF($G{row}<>"","yes","")')
-    put(ws, row, 13, r.flag or r.extra, BLUE); put(ws, row, 14, r.memo, BLUE)
-widths(ws, [11, 11, 22, 24, 10, 14, 11, 9, 6, 16, 60, 20, 40, 46])
-ws.freeze_panes = "C4"; ws.auto_filter.ref = f"A3:N{3 + len(rc)}"
+    put(ws, row, 14, r.flag or r.extra, BLUE); put(ws, row, 15, r.memo, BLUE)
+widths(ws, [11, 11, 22, 24, 10, 14, 11, 9, 6, 11, 16, 60, 20, 40, 46])
+ws.freeze_panes = "C4"; ws.auto_filter.ref = f"A3:O{3 + len(rc)}"
 
 wb.save(OUT)
 print("saved", OUT, "| children", len(ch), "| families", len(fam), "| receipts", len(rc))

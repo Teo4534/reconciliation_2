@@ -45,7 +45,7 @@ it, a reviewer told to break it will.
 The loop is not configuration. It is a prompt the main session follows:
 
 ```
-cd reconciliation_2 && claude
+cd reconciliation-repo && claude
 
 > Use the implementer agent to replace SequenceMatcher in engine.evidence() with rapidfuzz,
 > keeping the 0.85 threshold semantics as close as possible. Then use the reviewer agent on
@@ -96,7 +96,8 @@ pass; and nothing is done until `./check.sh` is green with `WRONG = 0`.
 Good first runs for the loop, in rough order of value:
 
 1. `rapidfuzz` in place of `difflib.SequenceMatcher` in `evidence()` - the only real hotspot at
-   scale, and the CV describes the fallback as Levenshtein, which `SequenceMatcher` is not.
+   scale, and a true edit-distance ratio rather than `SequenceMatcher`'s longest-common-subsequence
+   one.
 2. Cache `evidence()` per receipt - it is computed once for `named` in pass 1 and again in pass 2.
 3. Amounts as weak evidence for tie-breaks between families with the same surname, never as the
    sole basis for allocation.

@@ -7,8 +7,8 @@ Reports, per failure mode: how many lines were allocated automatically, how many
 correct, and how many were sent for review. The number that matters is wrong - a receipt
 credited to the wrong family is worse than one held back for a human.
 """
-import csv, sys
-from collections import defaultdict
+import csv, re, sys, unicodedata
+from collections import Counter, defaultdict
 from openpyxl import load_workbook
 
 AUTO_TIERS = {"M", "A", "B"}
@@ -16,7 +16,33 @@ LEDGER = sys.argv[1] if len(sys.argv) > 1 else "examples/fee_ledger.xlsx"
 TRUTH = sys.argv[2] if len(sys.argv) > 2 else "examples/ground_truth.csv"
 
 wb = load_workbook(LEDGER, data_only=True)
-fam_name = {r[0]: str(r[1] or "") for r in wb["Families"].iter_rows(min_row=4, values_only=True) if r[0]}
+
+
+def norm_family(s):
+    """Family name to a comparable form: accents stripped, ' / ' joined with '-', upper case.
+
+    Comparison is exact on this form. Substring comparison is wrong here: MARCHETTI is a
+    substring of ACHTERBERG-MARCHETTI, and those are two unrelated families.
+    """
+    s = unicodedata.normalize("NFKD", str(s or ""))
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = s.upper().replace(" / ", "-").replace("/", "-")
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def invoices_of(cell):
+    return {p.strip() for p in re.split(r"[;,]", str(cell or "")) if p.strip()}
+
+
+fam_name, fam_invoices = {}, {}
+for r in wb["Families"].iter_rows(min_row=4, values_only=True):
+    if not r[0]:
+        continue
+    fam_name[r[0]] = norm_family(r[1])
+    fam_invoices[r[0]] = invoices_of(r[4])
+
+# Families that share a name cannot be told apart by name alone; the invoice number breaks the tie.
+name_counts = Counter(fam_name.values())
 
 got = []
 for r in wb["Receipts"].iter_rows(min_row=4, values_only=True):
@@ -50,12 +76,21 @@ for g in got:
     pairs.append((g, bucket.pop(0)))
 
 
-def matches(fid, true_family):
+def matches(fid, true_family, true_invoice=""):
+    """True when fid is the family the generator says the receipt belongs to.
+
+    Exact on the normalised name. Where two families share a name, the ground-truth invoice
+    number must also be one of that family's invoices.
+    """
     if not fid:
         return False
-    have = fam_name.get(fid, "").upper().replace(" / ", "-")
-    want = true_family.upper()
-    return want in have or have in want
+    have = fam_name.get(fid, "")
+    want = norm_family(true_family)
+    if not have or have != want:
+        return False
+    if name_counts[have] > 1 and true_invoice:
+        return true_invoice.strip() in fam_invoices.get(fid, set())
+    return True
 
 
 stats = defaultdict(lambda: dict(n=0, auto=0, right=0, wrong=0, review=0))
@@ -69,7 +104,7 @@ for g, t in pairs:
         continue
     if g["allocated"]:
         s["auto"] += 1
-        if matches(g["fid"], t["true_family"]):
+        if matches(g["fid"], t["true_family"], t.get("true_invoice", "")):
             s["right"] += 1
         else:
             s["wrong"] += 1

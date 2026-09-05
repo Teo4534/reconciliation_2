@@ -253,12 +253,15 @@ def read_receipts(ws, cfg: Config) -> list[Receipt]:
         if ws.cell(r, 1).value is None:
             break
         g = lambda c: ws.cell(r, c).value
-        memo = g(14) or ""
+        # Receipts layout, set in build_ledger.py: A date, B amount, C payer, D reference, E term,
+        # F family override, G family, H allocated, I tier, J family (engine), K candidates,
+        # L why, M amount check, N flags, O full memo.
+        memo = g(15) or ""
         cur_ref, prior_ref = parse_refs(norm(memo), cfg)
         rows.append(Receipt(
             r=r, date=g(1), amount=float(g(2) or 0), payer=g(3) or "", ref=g(4) or "", memo=memo,
             cur_ref=cur_ref, prior_ref=prior_ref, term=g(5), override=str(g(6) or "").strip(),
-            note=g(13) or "",
+            note=g(14) or "",
         ))
     return rows
 
