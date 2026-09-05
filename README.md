@@ -50,7 +50,7 @@ assigned and the reason it recorded.
 | **someone else's reference** | `MARGIT RASMUSSEN    2026-039` | X | reference 2026-039 points to FAM-049 but the memo names FAM-048, parent may have typed the wrong invoice number |
 
 The last row is the case that matters. A naive matcher follows the reference, credits the wrong
-family, one parent chased for money they paid and another isi incorrectly marked
+family, one parent chased for money they paid and another incorrectly marked
 as having been paid. The engine refuses to allocate when the reference and the payer name
 disagree, and says so.
 
