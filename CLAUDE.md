@@ -1,4 +1,4 @@
-# Fee reconciliation - working rules
+# Fee reconciliation - rules
 
 Allocates bank receipts to families on ranked evidence. `engine.py` is the logic (pure functions,
 no Excel); `reconcile.py` is the I/O around it. Read `README.md` for the tiers and why they exist.
@@ -21,10 +21,10 @@ Do not edit tests to make them pass; if a test is wrong, say so and stop.
 - `tests/test_pipeline.py` end-to-end over three generated seeds.
 
 ## Style
-Small pure functions with a docstring saying what they decide. No hard-coded terms, years or fee
+Small pure functions with a docstring saying what they decide. No hard coded terms, years or fee
 amounts outside `Config`. Reason strings are templates: the same input always produces the same text.
 
 ## Workflow
 Changes go implementer -> harness -> reviewer -> (fix if needed) -> done.
 Use the `implementer` agent to make a change and the `reviewer` agent to check it. The reviewer sees
-only the diff and the harness output, never the implementer's reasoning - that separation is the point.
+only the diff and the harness output, never the implementer's reasoning.
