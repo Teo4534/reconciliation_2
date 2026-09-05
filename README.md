@@ -76,6 +76,62 @@ Every reason string is a template, not a generated sentence. Each rule that fire
 phrase. The same input always produces the same allocation and the same explanation, which is what
 makes the output auditable.
 
+## One family, end to end
+
+Everything below is real output from `examples/`, seed 20260101.
+
+The Maalouf family has two children on the roster. Siblings are billed on one invoice at the
+two-child rate, so the family owes one combined amount rather than two separate ones.
+
+| Child | Surname | First name | Class | Status | Invoiced |
+|---|---|---|---|---|---|
+| CH-064 | MAALOUF | Bastien | Saturday | Enrolled | £387.25 |
+| CH-065 | MAALOUF | Kwame | Saturday | Enrolled | £387.25 |
+
+Two payments arrive, five weeks apart, from the same account:
+
+| Bank memo | Amount | Tier | Why the engine decided that |
+|---|---|---|---|
+| `GENEVIEVE MAALOUF   MAALOU2026-030` | £387.25 | A | invoice reference 2026-030 |
+| `GENEVIEVE MAALOUF   2nd payment` | £387.25 | A | payer name previously seen with a verified reference for this family |
+
+The second row is the one worth looking at. Its memo contains no invoice number, no term, and
+nothing a lookup could key on &mdash; a spreadsheet formula has nothing to work with. It is allocated
+because the first payment tied the payer name GENEVIEVE MAALOUF to FAM-039 through a reference the
+engine had already verified. Confirm a payer once and every later payment from that account
+follows.
+
+The family then appears on the Position sheet as settled:
+
+| Family ID | Family | Children | Invoice no(s) | Expected | Received | Balance | Status | Receipts |
+|---|---|---|---|---|---|---|---|---|
+| FAM-039 | MAALOUF | 2 | 2026-030 | £774.50 | £774.50 | £0.00 | settled | 2 |
+
+## What the Position sheet looks like
+
+One row per family, and the sheet a bursar actually works from. Real output, three of each status:
+
+| Family ID | Family | Children | Invoice no(s) | Expected | Received | Balance | Status | Receipts |
+|---|---|---|---|---|---|---|---|---|
+| FAM-001 | ABARCA | 1 | 2026-004 | £409.50 | £409.50 | £0.00 | settled | 1 |
+| FAM-003 | ACHTERBERG-MARCHETTI | 1 | 2026-001 | £434.50 | £434.50 | £0.00 | settled | 1 |
+| FAM-004 | ASHWORTH | 1 | 2026-005 | £434.50 | £434.50 | £0.00 | settled | 1 |
+| FAM-048 | RASMUSSEN | 1 | 2026-038 | £459.50 | £229.75 | £229.75 | part paid | 1 |
+| FAM-008 | BELHADJ | 2 | 2026-008, 2026-008a | £774.50 | £1,184.00 | &minus;£409.50 | **over paid** | 1 |
+| FAM-002 | ACHTERBERG | 1 | 2026-052 | £434.50 | £0.00 | £434.50 | unpaid | 0 |
+| FAM-007 | BEAUCHAMP | 1 | 2026-007 | £434.50 | £0.00 | £434.50 | unpaid | 0 |
+| FAM-009 | BELHADJ-TREVELYAN | 1 | 2026-002 | £434.50 | £0.00 | £434.50 | unpaid | 0 |
+
+Across the whole sample: **51 families settled, 2 part paid, 7 still owing.**
+
+FAM-008 is the interesting row. Its invoice number is shared with another family (`2026-008` and
+`2026-008a`), and it shows as over paid by exactly one sibling share &mdash; a receipt belonging to
+the other family has landed here. This is the case the README opens with, caught by the arithmetic
+rather than by the matcher, which is why the Position sheet carries a balance column and not just a
+paid flag.
+
+![The Position sheet, filtered to families still owing](examples/position_sheet.png)
+
 ## Measured on generated data
 
 `python score.py`, seed 20260101:
