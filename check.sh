@@ -11,7 +11,7 @@ echo "== 3/3 score =="
 python3 generate_fake_data.py examples --seed 20260101 >/dev/null
 python3 build_ledger.py examples/roster.xlsx examples/bank.xlsx examples/fee_ledger.xlsx >/dev/null
 python3 reconcile.py examples/fee_ledger.xlsx >/dev/null
-python3 score.py | tail -4
+python3 score.py | tail -9
 WRONG=$(python3 score.py | awk '/^TOTAL/ {print $5}')
 if [ "$WRONG" != "0" ]; then echo "FAIL: $WRONG misallocated receipt(s). Precision is the invariant."; exit 1; fi
 echo "OK"

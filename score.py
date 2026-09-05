@@ -11,11 +11,14 @@ import csv, re, sys, unicodedata
 from collections import Counter, defaultdict
 from openpyxl import load_workbook
 
+from engine import Config, load_roster, norm, tokens
+
 AUTO_TIERS = {"M", "A", "B"}
 LEDGER = sys.argv[1] if len(sys.argv) > 1 else "examples/fee_ledger.xlsx"
 TRUTH = sys.argv[2] if len(sys.argv) > 2 else "examples/ground_truth.csv"
 
 wb = load_workbook(LEDGER, data_only=True)
+roster = load_roster(wb, Config())
 
 
 def norm_family(s):
@@ -50,7 +53,7 @@ for r in wb["Receipts"].iter_rows(min_row=4, values_only=True):
         break
     tier, fid = r[8] or "", r[9] or ""
     got.append(dict(
-        date=r[0], amount=float(r[1] or 0), payer=str(r[2] or ""),
+        date=r[0], amount=float(r[1] or 0), payer=str(r[2] or ""), memo=str(r[14] or ""),
         tier=tier, fid=fid, allocated=tier in AUTO_TIERS and bool(fid),
     ))
 
@@ -124,6 +127,26 @@ print()
 print(f"allocated automatically : {tot['auto']}/{tot['n']} = {tot['auto']/tot['n']:.0%}")
 print(f"of those, correct       : {tot['right']}/{tot['auto']} = {tot['right']/max(tot['auto'],1):.1%}")
 print(f"sent for human review   : {tot['review']}")
+
+# ---------------------------------------------------------------------------- baseline
+# A number with nothing to compare it against says very little. This is the simplest thing that
+# could work: allocate when exactly one roster surname appears in the memo, and never otherwise.
+# No references, no aliasing, no tie-breaks. Whatever the engine scores above this is what the
+# tier ladder is actually buying.
+base_auto = base_right = 0
+for g, t in pairs:
+    hits = {f for tok in set(tokens(norm(g["memo"]))) for f in roster.sur_index.get(tok, set())}
+    if len(hits) != 1:
+        continue
+    base_auto += 1
+    if t["true_family"] and matches(next(iter(hits)), t["true_family"], t.get("true_invoice", "")):
+        base_right += 1
+
+print()
+print(f"{'':24s} {'allocated':>12s} {'correct':>10s}")
+print(f"{'naive surname-only':24s} {base_auto:>5d}/{tot['n']:<6d} {base_right/max(base_auto,1):>9.1%}")
+print(f"{'engine':24s} {tot['auto']:>5d}/{tot['n']:<6d} {tot['right']/max(tot['auto'],1):>9.1%}")
+print(f"{'the ladder is worth':24s} {tot['auto']-base_auto:>+5d} receipt(s)")
 if wrong_rows:
     print("\nMISALLOCATED:")
     for w in wrong_rows:
