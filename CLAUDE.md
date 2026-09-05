@@ -1,7 +1,9 @@
 # Fee reconciliation - rules
 
 Allocates bank receipts to families on ranked evidence. `engine.py` is the logic (pure functions,
-no Excel); `reconcile.py` is the I/O around it. Read `README.md` for the tiers and why they exist.
+writes no Excel); `reconcile.py` is the I/O around it. Read `README.md` for the tiers and why they
+exist. Note the two exceptions: `load_roster` and `read_receipts` take an openpyxl workbook and read
+it by column position. Everything else works on plain data.
 
 ## The one invariant
 **A receipt is never allocated to the wrong family.** Coverage (the 86%) may go down in a change;

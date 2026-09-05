@@ -143,7 +143,7 @@ live in `Rates` and `Terms`. Running the rules against the invoices as a check f
 ## Files
 
 ```
-engine.py               allocation logic: pure functions, no Excel, unit-testable in milliseconds
+engine.py               allocation logic: pure functions, writes no Excel, unit-testable in milliseconds
 reconcile.py            loads the ledger, calls the engine, writes Position / Review / Summary
 build_ledger.py         roster + bank  ->  structured workbook
 generate_fake_data.py   fictional roster + bank export + ground truth
