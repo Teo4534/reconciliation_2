@@ -27,7 +27,7 @@ python generate_fake_data.py examples --seed 20260101      # roster.xlsx, bank.x
 python build_ledger.py examples/roster.xlsx examples/bank.xlsx examples/fee_ledger.xlsx
 python reconcile.py examples/fee_ledger.xlsx               # allocates, writes Position / Review / Summary
 python score.py                                            # measures the result against ground truth
-pytest -q                                                  # 10 tests across 3 generated datasets
+./check.sh                                                 # unit tests, end-to-end on 3 seeds, precision gate
 ```
 
 ## What the bank actually sends
@@ -143,12 +143,31 @@ live in `Rates` and `Terms`. Running the rules against the invoices as a check f
 ## Files
 
 ```
-generate_fake_data.py   fictional roster + bank export + ground truth
+engine.py               allocation logic: pure functions, no Excel, unit-testable in milliseconds
+reconcile.py            loads the ledger, calls the engine, writes Position / Review / Summary
 build_ledger.py         roster + bank  ->  structured workbook
-reconcile.py            allocation engine, Position / Review / Summary sheets
+generate_fake_data.py   fictional roster + bank export + ground truth
 score.py                accuracy against ground truth, by failure mode
-tests/test_pipeline.py  10 end-to-end tests over 3 generated datasets
+check.sh                the harness: unit tests, end-to-end on three seeds, WRONG must be 0
+tests/test_engine.py    21 unit tests on the matching rules (no workbook needed)
+tests/test_pipeline.py  end-to-end tests over 3 generated datasets
 examples/               generated data and the resulting ledger
 ```
+
+## How changes are made
+
+Development runs as a loop with a hard gate in the middle. `check.sh` is the gate: it fails if any
+test breaks or if a single receipt is credited to the wrong family. Around it sit two Claude Code
+subagents defined in `.claude/agents/`:
+
+- **implementer** makes one change in `engine.py`, adds a unit test that fails without it, and runs
+  the gate before reporting.
+- **reviewer** reads only the diff and the gate output, never the implementer's reasoning, and tries
+  to construct an input that misallocates. It cannot edit code.
+
+The orchestrating session dispatches the task, relays the reviewer's findings back to the
+implementer, and stops on APPROVE or after three rounds. The separation is deliberate: a model
+reviewing its own change tends to find the flaws it already knows about; a reviewer that starts
+from the diff finds the others. `CLAUDE.md` holds the rules both agents work to; `docs/AGENT_WORKFLOW.md` explains the setup in full.
 
 MIT licensed.

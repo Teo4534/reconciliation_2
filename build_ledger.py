@@ -318,7 +318,7 @@ header(ws, 3, cols)
 first, last = 4, 3 + len(ch)
 for i, r in ch.iterrows():
     row = first + i
-    for j, v in enumerate([r.cid, r.fid, r.sur, r.first, r.cls, r.status, TERM_CUR, r.inv_raw], 1):
+    for j, v in enumerate([r.cid, r.fid, r.sur, r["first"], r.cls, r.status, TERM_CUR, r.inv_raw], 1):
         put(ws, row, j, v, BLUE)
     put(ws, row, 9, f'=IF($J{row}<>"",$J{row},IF($E{row}="Wednesday",INDEX(Terms!$D$4:$D$5,MATCH($G{row},Terms!$A$4:$A$5,0)),INDEX(Terms!$C$4:$C$5,MATCH($G{row},Terms!$A$4:$A$5,0))))', fmt="0.0")
     put(ws, row, 10, r.sess_override if r.sess_override else None, BLUE, "0.0")
