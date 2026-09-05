@@ -117,32 +117,19 @@ ch["fid"] = ch.index.map(fam_of)
 fam = pd.DataFrame(fam_rows)
 ch = ch.sort_values(["fid", "sur", "first"]).reset_index(drop=True)
 ch["cid"] = [f"CH-{i+1:03d}" for i in range(len(ch))]
-inv_to_fams = defaultdict(set)
-for _, r in ch.iterrows():
-    if r.inv: inv_to_fams[r.inv].add(r.fid)
-
 # ---------------------------------------------------------------- bank
 b = pd.read_excel(BANK, header=None)
 names = ["date", "amount", "memo", "cat", "note", "extra"]
 b = b.reindex(columns=range(len(names)))
 b.columns = names
-# Real exports carry blank spacer rows. Without this a blank amount reaches the comparison at
-# line 188 as NaT and raises "'<' not supported between instances of 'NaTType' and 'int'".
+# Real exports carry blank spacer rows. Without this a blank amount reaches the `r.amount < 0`
+# test below as NaT and raises "'<' not supported between instances of 'NaTType' and 'int'".
 b = b.dropna(subset=["date", "amount"], how="all").reset_index(drop=True)
 CODE = re.compile(r"^(FT|BGC|BG|BBP|BP|B)$")
 rec = []
+# JAN-2026 invoice totals. Used only to notice a prior-term reference sitting on a payment whose
+# amount and date say current term. Deciding which family a receipt belongs to is engine.py's job.
 cur_amounts = {409.5, 362.25, 724.5, 322.0, 966.0, 434.5, 459.5, 749.5, 774.5, 387.25, 372.25}
-# surname index for memo scanning (whole-word, 4+ letters; hyphenated names split into parts)
-sur_index = defaultdict(set)
-for _, r in ch.iterrows():
-    for part in re.split(r"[-\s]", norm(r.sur).upper()):
-        if len(part) >= 4: sur_index[part].add(r.fid)
-def fams_in_memo(text):
-    T = norm(text).upper()
-    hits = set()
-    for part, fids in sur_index.items():
-        if re.search(r"(?<![A-Z])" + re.escape(part) + r"(?![A-Z])", T): hits |= fids
-    return hits
 for _, r in b.iterrows():
     memo = str(r.memo)
     payer = memo[:23].strip()
@@ -154,48 +141,19 @@ for _, r in b.iterrows():
     cur_ref = f"2026-{m.group(1)}" if m else ""
     pm = re.search(r"2025\s*-?\s*(\d{3})|(?<!\d)(2[1-4])\s*-?\s*(1\d\d)(?!\d)|(?<!\d)(2[1-4])(\d{3})(?!\d)", M)
     prior_ref = pm.group(0) if (pm and not cur_ref) else ""
-    bm = re.search(r"(?<!\d)(\d{3})(?!\d)", M) if not (cur_ref or prior_ref) else None
-    bare = f"2026-{bm.group(1)}" if bm else ""
-    if cur_ref: term, basis = TERM_CUR, "current-term reference"
-    elif prior_ref: term, basis = TERM_PRIOR, "prior-term reference"
-    else:
-        term = TERM_PRIOR if r.date < pd.Timestamp("2025-12-15") else TERM_CUR
-        basis = "date only  -  no usable reference"
-    auto, how, suggest = "", "", ""
-    named = fams_in_memo(memo)
-    if cur_ref:
-        f = inv_to_fams.get(cur_ref, set())
-        if len(f) == 1:
-            cand = next(iter(f))
-            if named and cand not in named:
-                how = f"CONFLICT  -  reference {cur_ref} points to {cand} but the memo names " + ", ".join(sorted(named)) + " (parent may have typed the wrong invoice number)"
-                if len(named) == 1: suggest = next(iter(named))
-            else:
-                auto, how = cand, "invoice reference"
-        elif len(f) > 1:
-            inter = f & named
-            if len(inter) == 1: auto, how = next(iter(inter)), "invoice reference (shared number resolved by surname in memo)"
-            else: how = "ambiguous  -  invoice number shared by " + ", ".join(sorted(f))
-        else: how = "reference not in roster"
-    elif prior_ref:
-        how = "prior-term register not loaded"
-        if len(named) == 1: suggest = next(iter(named))
-    elif bare and len(inv_to_fams.get(bare, set())) == 1:
-        suggest, how = next(iter(inv_to_fams[bare])), "bare 3-digit ref  -  series assumed, review"
-    elif len(named) == 1:
-        suggest, how = next(iter(named)), "no usable reference  -  surname found in memo, review"
-    elif len(named) > 1:
-        how = "no usable reference  -  memo names several families: " + ", ".join(sorted(named))
-    else: how = "no usable reference  -  name match needed (project 2)"
+    # Which term a receipt belongs to is a property of the receipt, so it is settled here. Which
+    # family it belongs to is a judgement on ranked evidence, and that lives in engine.py.
+    if cur_ref: term = TERM_CUR
+    elif prior_ref: term = TERM_PRIOR
+    else: term = TERM_PRIOR if r.date < pd.Timestamp("2025-12-15") else TERM_CUR
     flags = []
     if r.amount < 0: flags.append("outflow / refund")
     if len(memo) >= 44: flags.append("bank truncated the reference field")
     if prior_ref and r.date >= pd.Timestamp("2026-01-01") and round(float(r.amount), 2) in cur_amounts:
         flags.append("prior-term ref but 2026-term amount and date  -  parent may have reused old reference")
     extra = " | ".join(str(x).strip() for x in [r.note, r.extra] if pd.notna(x))
-    rec.append(dict(date=r.date.date(), amount=float(r.amount), payer=payer, ref=ref, code=code, memo=memo,
-                    cur_ref=cur_ref, prior_ref=prior_ref, term=term, basis=basis, auto=auto, how=how,
-                    suggest=suggest, flag="; ".join(flags), extra=extra))
+    rec.append(dict(date=r.date.date(), amount=float(r.amount), payer=payer, ref=ref, memo=memo,
+                    term=term, flag="; ".join(flags), extra=extra))
 rc = pd.DataFrame(rec).sort_values("date").reset_index(drop=True)
 
 # ---------------------------------------------------------------- workbook
@@ -370,4 +328,3 @@ wb.save(OUT)
 print("saved", OUT, "| children", len(ch), "| families", len(fam), "| receipts", len(rc))
 print("statuses", ch.status.value_counts().to_dict())
 print("shared invoices", shared_inv, "| no-invoice children", n_noinv, "| discounts", n_disc, "| out of seq", n_out_of_seq)
-print("receipt auto-match", (rc.auto != "").sum(), "| suggested", (rc.suggest != "").sum(), "| basis counts", rc.how.value_counts().to_dict())
