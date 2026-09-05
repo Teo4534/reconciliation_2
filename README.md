@@ -18,16 +18,124 @@ No real data appears anywhere in this repository. `generate_fake_data.py` is a f
 roster and bank export that reproduce the failure patterns, which also means
 every line has a known correct answer, so accuracy can be measured rather than asserted.
 
-## Run it
+## How the school bills
+
+Everything downstream follows from the fee rules, so they come first. The school is a Saturday
+French school with a small Wednesday club, and its price list has four moving parts.
+
+**Saturday tuition is charged per family, not per child.** The rate rises with the number of
+siblings enrolled, but not proportionally, which is the sibling discount:
+
+| Siblings enrolled | Per family, per session | Per child, per session |
+|---|---|---|
+| 1 | £19.50 | £19.50 |
+| 2 | £34.50 | £17.25 |
+| 3 | £46.00 | £15.33 |
+| 4 | £57.10 | £14.28 |
+
+**Wednesday club is charged per child**, flat, at £16.00 per session &mdash; no sibling tier.
+
+**Two add-ons**, both £25: a one-off registration fee at first enrolment, and an annual supplies
+charge.
+
+**A term is a number of sessions.** JAN-2026 is 21 Saturday sessions and 20 Wednesday ones;
+AUT-2025 was 11. So a single child on Saturdays for JAN-2026 owes 21 &times; £19.50 = **£409.50**,
+and £434.50 with supplies &mdash; which is why those two amounts appear everywhere in the examples.
+
+All of this lives on the `Rates` and `Terms` sheets of the generated workbook as data, not in code.
+A price change is a cell edit.
+
+Three properties of this billing model create the whole reconciliation problem:
+
+- **Siblings share one invoice**, so a family pays one combined amount and the payment cannot be
+  attributed to a child.
+- **Invoice numbers are reissued each term** and, in the real data, were occasionally issued twice
+  to unrelated families. So the invoice number cannot be the identity key.
+- **Whoever holds the bank account pays**, and that is not always a parent whose surname matches
+  the child's.
+
+## Getting the data
+
+There is no data in this repository to protect, so the first step generates some.
 
 ```bash
 pip3 install -r requirements.txt
+python3 generate_fake_data.py examples --seed 20260101
+```
 
-python3 generate_fake_data.py examples --seed 20260101      # roster.xlsx, bank.xlsx, ground_truth.csv
+That writes three files:
+
+| File | What it is |
+|---|---|
+| `roster.xlsx` | 60 families, ~94 children. Mirrors the real roster's column names and its quirks: surnames in capitals, invoice numbers with an `a` suffix on a sibling's row, free-text `PAID` notes. |
+| `bank.xlsx` | 80 payment lines in the bank's own fixed-width memo format. |
+| `ground_truth.csv` | The answer key &mdash; which family each of those 80 lines really belongs to. This is what makes accuracy measurable rather than asserted. |
+
+The seed is deliberate. The same seed always produces the same roster, the same payments and the
+same answers, so a change in the score is a change in the engine and never in the data. `check.sh`
+runs three different seeds for the same reason.
+
+The generator also plants specific problems on purpose, so that the checks have something to find:
+
+- one child billed £18.00 for supplies instead of £25.00
+- one child with a &minus;£30.00 supplies line, which the ledger reads as a discount
+- one enrolled child with no invoice number and no fee
+- two unrelated families issued the same invoice number
+- roughly 30% of families paying in two instalments rather than one
+- one outgoing refund, to check that a negative amount is not treated as a receipt
+
+## What makes the payments hard
+
+The bank sends a fixed-width memo: 23 characters of payer name, then a 21-character reference slot
+that silently truncates. The generator produces ten failure modes in the proportions below, taken
+from the real ledger.
+
+| Mode | Share of 80 | What the parent did |
+|---|---|---|
+| `clean` | 14 | Typed the reference exactly as invoiced |
+| `prior_term` | 9 | Reused last term's reference |
+| `name_only` | 9 | No reference, just a surname or "school fees" |
+| `glued` | 6 | Ran the reference into their own name with no separator |
+| `no_hyphen` | 5 | Dropped the hyphen, or added spaces |
+| `truncated` | 5 | Wrote enough that the bank cut it off |
+| `bare` | 4 | Typed only the three-digit part |
+| `first_name_only` | 3 | Put a child's first name and nothing else |
+| `wrong_ref` | 3 | Typed a valid reference belonging to a different family |
+| `shared_invoice` | 2 | Used a number issued to two families |
+
+Roughly 30% of these are then split into two instalments, and the second instalment usually carries
+no reference at all &mdash; "2nd payment", or just the surname.
+
+## Run the whole thing
+
+```bash
+python3 generate_fake_data.py examples --seed 20260101   # roster + bank + answer key
 python3 build_ledger.py examples/roster.xlsx examples/bank.xlsx examples/fee_ledger.xlsx
-python3 reconcile.py examples/fee_ledger.xlsx               # allocates, writes Position / Review / Summary
-python3 score.py                                            # measures the result against ground truth
-./check.sh                                                 # unit tests, end-to-end on 3 seeds, precision gate
+python3 reconcile.py examples/fee_ledger.xlsx            # allocate; write Position / Review / Summary
+python3 score.py                                         # accuracy against the answer key
+./check.sh                                               # all of the above, gated
+```
+
+Step by step:
+
+1. **`generate_fake_data.py`** invents the roster, the bank export and the answer key. Skip this
+   entirely when running on real files.
+2. **`build_ledger.py`** applies the fee rules to the roster to work out what each family owes,
+   groups children into families, and loads the bank lines. Output is `fee_ledger.xlsx` with the
+   `Rates`, `Terms`, `Families`, `Children` and `Receipts` sheets. It decides nothing about who
+   paid what.
+3. **`reconcile.py`** does the allocation, calling `engine.py` for every decision, and adds the
+   `Position`, `Review` and `Summary` sheets to the same workbook.
+4. **`score.py`** compares the result against the answer key and prints accuracy by failure mode.
+   Only works on generated data &mdash; real data has no answer key.
+5. **`check.sh`** runs the unit tests, then the whole pipeline on three seeds, then the score, and
+   fails if a single receipt went to the wrong family.
+
+To run it on real files, use `preflight.py` first &mdash; it checks a roster and bank export against
+what `build_ledger.py` requires and tells you what is missing, without changing anything.
+
+```bash
+python3 preflight.py your_roster.xlsx your_bank.xlsx
 ```
 
 ## What the bank actually sends
@@ -160,6 +268,37 @@ The design target is precision, not coverage. Sending more lines to a human is a
 one to the wrong family is a wrong answer that propagates into arrears letters. `pytest` asserts
 zero misallocations across three independently generated datasets.
 
+`score.py` also runs the simplest thing that could work &mdash; allocate when exactly one roster
+surname appears in the memo, never otherwise &mdash; and prints it alongside:
+
+```
+                            allocated    correct
+naive surname-only          67/80        100.0%
+engine                      69/80        100.0%
+the ladder is worth         +2 receipt(s)
+```
+
+That number is small, and it is a fact about the fixture rather than the engine. The generator
+builds every payer name as `{parent first name} {family surname}`, so the correct answer is written
+in plain text on all 79 fee lines and a surname lookup cannot help but find it. The tiers earn
+their place where the payer is *not* the family &mdash; a grandparent, a company account, a parent
+with a different surname &mdash; and the generator never produces one. Closing that gap is the
+single most useful change left, and it is why the baseline is printed rather than hidden.
+
+### What the sample data does not cover
+
+Being explicit about this, because the numbers above are only as good as the fixture behind them:
+
+- **No Wednesday club children.** The fee model prices them at £16.00 per child per session with no
+  sibling tier, and `build_ledger.py` implements it, but the generator produces none, so that whole
+  branch is priced and never exercised.
+- **Every payer surname matches the family**, as above.
+- **No third-party payers**, no company accounts, no grandparents.
+- **Payment amounts sit exactly on the model** &mdash; full amount or exact half. Real transfers are
+  rounded, combined across terms, or short by a few pounds.
+- **One term only.** AUT-2025 exists in `Terms` but its invoice register is not loaded, so
+  prior-term receipts can be identified by family and not reconciled against an invoice.
+
 ## The ledger
 
 `build_ledger.py` writes a workbook rather than a database, because the people who use it live in
@@ -203,7 +342,8 @@ engine.py               allocation logic: pure functions, writes no Excel, unit-
 reconcile.py            loads the ledger, calls the engine, writes Position / Review / Summary
 build_ledger.py         roster + bank  ->  structured workbook
 generate_fake_data.py   fictional roster + bank export + ground truth
-score.py                accuracy against ground truth, by failure mode
+score.py                accuracy against ground truth, by failure mode, against a naive baseline
+preflight.py            checks a real roster and bank export before you run the pipeline
 check.sh                the harness: unit tests, end-to-end on three seeds, WRONG must be 0
 tests/test_engine.py    21 unit tests on the matching rules (no workbook needed)
 tests/test_pipeline.py  end-to-end tests over 3 generated datasets
