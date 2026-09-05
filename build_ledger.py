@@ -126,6 +126,9 @@ b = pd.read_excel(BANK, header=None)
 names = ["date", "amount", "memo", "cat", "note", "extra"]
 b = b.reindex(columns=range(len(names)))
 b.columns = names
+# Real exports carry blank spacer rows. Without this a blank amount reaches the comparison at
+# line 188 as NaT and raises "'<' not supported between instances of 'NaTType' and 'int'".
+b = b.dropna(subset=["date", "amount"], how="all").reset_index(drop=True)
 CODE = re.compile(r"^(FT|BGC|BG|BBP|BP|B)$")
 rec = []
 cur_amounts = {409.5, 362.25, 724.5, 322.0, 966.0, 434.5, 459.5, 749.5, 774.5, 387.25, 372.25}
