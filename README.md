@@ -33,14 +33,14 @@ siblings enrolled, but not proportionally, which is the sibling discount:
 | 3 | £46.00 | £15.33 |
 | 4 | £57.10 | £14.28 |
 
-**Wednesday club is charged per child**, flat, at £16.00 per session &mdash; no sibling tier.
+**Wednesday club is charged per child**, flat, at £16.00 per session with no sibling tier.
 
 **Two add-ons**, both £25: a one-off registration fee at first enrolment, and an annual supplies
 charge.
 
 **A term is a number of sessions.** JAN-2026 is 21 Saturday sessions and 20 Wednesday ones;
 AUT-2025 was 11. So a single child on Saturdays for JAN-2026 owes 21 &times; £19.50 = **£409.50**,
-and £434.50 with supplies &mdash; which is why those two amounts appear everywhere in the examples.
+and £434.50 with supplies, which is why those two amounts appear everywhere in the examples.
 
 All of this lives on the `Rates` and `Terms` sheets of the generated workbook as data, not in code.
 A price change is a cell edit.
@@ -69,7 +69,7 @@ That writes three files:
 |---|---|
 | `roster.xlsx` | 60 families, ~94 children. Mirrors the real roster's column names and its quirks: surnames in capitals, invoice numbers with an `a` suffix on a sibling's row, free-text `PAID` notes. |
 | `bank.xlsx` | 80 payment lines in the bank's own fixed-width memo format. |
-| `ground_truth.csv` | The answer key &mdash; which family each of those 80 lines really belongs to. This is what makes accuracy measurable rather than asserted. |
+| `ground_truth.csv` | The answer key: which family each of those 80 lines really belongs to. This is what makes accuracy measurable rather than asserted. |
 
 The seed is deliberate. The same seed always produces the same roster, the same payments and the
 same answers, so a change in the score is a change in the engine and never in the data. `check.sh`
@@ -104,7 +104,7 @@ from the real ledger.
 | `shared_invoice` | 2 | Used a number issued to two families |
 
 Roughly 30% of these are then split into two instalments, and the second instalment usually carries
-no reference at all &mdash; "2nd payment", or just the surname.
+no reference at all, implying a 2nd payment or just the surname.
 
 ## Run the whole thing
 
@@ -127,11 +127,11 @@ Step by step:
 3. **`reconcile.py`** does the allocation, calling `engine.py` for every decision, and adds the
    `Position`, `Review` and `Summary` sheets to the same workbook.
 4. **`score.py`** compares the result against the answer key and prints accuracy by failure mode.
-   Only works on generated data &mdash; real data has no answer key.
+   Only works on generated data since real data has no answer key.
 5. **`check.sh`** runs the unit tests, then the whole pipeline on three seeds, then the score, and
    fails if a single receipt went to the wrong family.
 
-To run it on real files, use `preflight.py` first &mdash; it checks a roster and bank export against
+To run it on real files, use `preflight.py` first. The file checks a roster and bank export against
 what `build_ledger.py` requires and tells you what is missing, without changing anything.
 
 ```bash
@@ -204,7 +204,7 @@ Two payments arrive, five weeks apart, from the same account:
 | `GENEVIEVE MAALOUF   2nd payment` | £387.25 | A | payer name previously seen with a verified reference for this family |
 
 The second row is the one worth looking at. Its memo contains no invoice number, no term, and
-nothing a lookup could key on &mdash; a spreadsheet formula has nothing to work with. It is allocated
+nothing a lookup could key on, and a spreadsheet formula has nothing to work with. It is allocated
 because the first payment tied the payer name GENEVIEVE MAALOUF to FAM-039 through a reference the
 engine had already verified. Confirm a payer once and every later payment from that account
 follows.
@@ -233,7 +233,7 @@ One row per family, and the sheet a bursar actually works from. Real output, thr
 Across the whole sample: **51 families settled, 2 part paid, 7 still owing.**
 
 FAM-008 is the interesting row. Its invoice number is shared with another family (`2026-008` and
-`2026-008a`), and it shows as over paid by exactly one sibling share &mdash; a receipt belonging to
+`2026-008a`), and it shows as over paid by exactly one sibling share, and a receipt belonging to
 the other family has landed here. This is the case the README opens with, caught by the arithmetic
 rather than by the matcher, which is why the Position sheet carries a balance column and not just a
 paid flag.
@@ -268,8 +268,9 @@ The design target is precision, not coverage. Sending more lines to a human is a
 one to the wrong family is a wrong answer that propagates into arrears letters. `pytest` asserts
 zero misallocations across three independently generated datasets.
 
-`score.py` also runs the simplest thing that could work &mdash; allocate when exactly one roster
-surname appears in the memo, never otherwise &mdash; and prints it alongside:
+`score.py` also runs the simplest thing that could work, allocate when exactly one roster
+surname appears in the memo, 
+and prints it alongside:
 
 ```
                             allocated    correct
@@ -281,8 +282,8 @@ the ladder is worth         +2 receipt(s)
 That number is small, and it is a fact about the fixture rather than the engine. The generator
 builds every payer name as `{parent first name} {family surname}`, so the correct answer is written
 in plain text on all 79 fee lines and a surname lookup cannot help but find it. The tiers earn
-their place where the payer is *not* the family &mdash; a grandparent, a company account, a parent
-with a different surname &mdash; and the generator never produces one. Closing that gap is the
+their place where the payer is *not* the family such as: a grandparent, a company account, a parent
+with a different surname, and the generator never produces one. Closing that gap is the
 single most useful change left, and it is why the baseline is printed rather than hidden.
 
 ### What the sample data does not cover
@@ -294,7 +295,7 @@ Being explicit about this, because the numbers above are only as good as the fix
   branch is priced and never exercised.
 - **Every payer surname matches the family**, as above.
 - **No third-party payers**, no company accounts, no grandparents.
-- **Payment amounts sit exactly on the model** &mdash; full amount or exact half. Real transfers are
+- **Payment amounts sit exactly on the model**, full amount or exact half. Real transfers are
   rounded, combined across terms, or short by a few pounds.
 - **One term only.** AUT-2025 exists in `Terms` but its invoice register is not loaded, so
   prior-term receipts can be identified by family and not reconciled against an invoice.
