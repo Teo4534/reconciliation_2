@@ -9,7 +9,7 @@ from collections import Counter, defaultdict
 import pytest
 
 from engine import (Config, Receipt, Roster, allocate, decide, evidence, families_named,
-                    norm, parse_refs, payer_key, tokens)
+                    norm, parse_refs, payer_key, surname_parts, tokens)
 
 CFG = Config()
 
@@ -21,7 +21,8 @@ def roster(**fams):
     for fid, (sur, first, inv) in fams.items():
         fid = fid.replace("_", "-")
         r.fam_name[fid] = sur.title()
-        r.sur_index[sur].add(fid)
+        for part in surname_parts(sur):
+            r.sur_index[part].add(fid)
         r.inv_index[inv].add(fid)
         r.expected[fid] = 409.5
         r.billed[fid] = 1
@@ -51,6 +52,28 @@ def test_tokens_drop_stop_words_and_short_fragments():
 
 def test_payer_key_is_letters_only():
     assert payer_key("Mrs. O'Brien-Smith") == "MRSOBRIENSMITH"
+
+
+def test_tokens_glue_a_leading_letter_but_never_a_possessive():
+    """Only an apostrophe after a single leading letter is removed (M'BOLO, O'BRIEN), matching
+    surname_parts(). A possessive or contraction stays a word boundary: ADAM'S must yield ADAM, or
+    a memo for child Adam would manufacture an exact hit on the surname ADAMS. The typographic
+    apostrophe counts too, since norm() would otherwise drop it and glue."""
+    assert tokens("LOUIS M'BOLO O'BRIEN") == ["LOUIS", "MBOLO", "OBRIEN"]
+    assert tokens("ADAM'S FEES") == ["ADAM"]
+    assert tokens("ADAM\u2019S FEES") == ["ADAM"]
+    assert tokens("MAALOUF'S FEES") == ["MAALOUF"]
+    assert tokens("WE'LL PAY THE REST") == ["PAY", "REST"]
+
+
+def test_apostrophe_surname_matches_exactly():
+    """M'BOLO on the roster and M'BOLO in a memo must meet: both sides index as MBOLO."""
+    assert surname_parts("M'BOLO") == ["MBOLO"]
+    r = roster(FAM_001=("M'BOLO", "Louis", "2026-001"))
+    assert r.sur_index["MBOLO"] == {"FAM-001"}
+    tier, fid, cands, why = decide(evidence("LOUIS M'BOLO fees", r, CFG), r)
+    assert (tier, fid) == ("B", "FAM-001")
+    assert "surname MBOLO" in why
 
 
 # ------------------------------------------------------------------ references
@@ -93,6 +116,18 @@ def test_truncated_surname_is_fuzzy_tier_c_not_allocated():
     assert tier == "C" and fid == "" and cands == {"FAM-010"}
 
 
+def test_possessive_memo_does_not_become_another_familys_surname():
+    """MARTIN'S FEES is the Martin family's, not the Martins family's; ADAM'S FEES, where Adam is
+    a child of one family and ADAMS the surname of another, stays a tie sent to review."""
+    r = roster(FAM_010=("MARTIN", "Maya", "2026-010"), FAM_011=("MARTINS", "Zak", "2026-011"))
+    tier, fid, cands, why = decide(evidence("MARTIN'S FEES", r, CFG), r)
+    assert (tier, fid, why) == ("B", "FAM-010", "surname MARTIN")
+    r = roster(FAM_001=("ADAMS", "Zoe", "2026-001"), FAM_002=("OTHER", "Adam", "2026-002"))
+    tier, fid, cands, why = decide(evidence("ADAM'S FEES", r, CFG), r)
+    assert tier not in CFG.auto_tiers and fid == ""
+    assert cands == {"FAM-001", "FAM-002"}
+
+
 def test_unique_child_first_name_is_evidence_but_not_enough_to_allocate():
     r = roster(FAM_010=("VANTERPOOL", "Halima", "2026-010"))
     ev = evidence("Halima", r, CFG)
@@ -118,6 +153,97 @@ def test_reference_agreeing_with_memo_is_tier_a():
     assert (x.tier, x.fid) == ("A", "FAM-047")
 
 
+def test_reference_from_a_payer_matching_nobody_is_not_allocated():
+    """A reference alone is not enough: nothing in the memo or the payer ties it to the family,
+    so it goes to review, and no alias is learned that would drag the next instalment along."""
+    r = roster(FAM_039=("SMITH", "Ann", "2026-039"))
+    rows = allocate([
+        receipt("GRANDMA JONES", "GRANDMA JONES 2026-039", r=4),
+        receipt("GRANDMA JONES", "2nd payment", r=5),
+    ], r, CFG)
+    x = rows[0]
+    assert x.tier == "C" and x.fid == "" and x.cands == {"FAM-039"}
+    assert "nothing else in the memo supports it" in x.why
+    assert rows[1].tier != "A" and rows[1].fid == ""
+
+
+def test_wrong_reference_from_an_unknown_payer_is_held_back():
+    """The misallocation this rule exists for: an unknown payer quoting someone else's invoice
+    number. Tier X cannot see it (the memo names nobody), so corroboration must."""
+    r = roster(FAM_048=("RASMUSSEN", "Ida", "2026-048"), FAM_049=("OTHER", "Bo", "2026-039"))
+    [x] = allocate([receipt("GRANDMA JONES", "GRANDMA JONES 2026-039")], r, CFG)
+    assert x.tier not in CFG.auto_tiers and x.fid == ""
+    assert x.cands == {"FAM-049"}
+
+
+def test_reference_corroborated_by_a_misspelt_surname_is_tier_a():
+    """Fuzzy evidence cannot allocate on its own, but it does corroborate a reference."""
+    r = roster(FAM_030=("MAALOUF", "Genevieve", "2026-030"))
+    [x] = allocate([receipt("GENEVEVE MALOUF", "GENEVEVE MALOUF 2026-030")], r, CFG)
+    assert (x.tier, x.fid) == ("A", "FAM-030")
+
+
+def test_reference_corroborated_by_a_seeded_alias_is_tier_a():
+    """A payer typed into the Families sheet for this family corroborates the reference."""
+    r = roster(FAM_030=("MAALOUF", "Genevieve", "2026-030"))
+    r.alias_seed["GRANDMAJONES"].add("FAM-030")
+    [x] = allocate([receipt("GRANDMA JONES", "GRANDMA JONES 2026-030")], r, CFG)
+    assert (x.tier, x.fid) == ("A", "FAM-030")
+
+
+@pytest.mark.parametrize("payer", ["ABC", "A B", ""])
+def test_short_payer_key_does_not_corroborate_a_reference(payer):
+    """A key below min_alias_len is too ambiguous to be an alias, so it cannot vouch for a later
+    bare reference either - otherwise every anonymous line would corroborate the next one."""
+    r = roster(FAM_001=("HASANOVIC", "Elodie", "2026-001"))
+    rows = allocate([
+        receipt(payer, "HASANOVIC 2026-001", r=4),
+        receipt(payer, "2026-001", r=5),
+    ], r, CFG)
+    assert (rows[0].tier, rows[0].fid) == ("A", "FAM-001")
+    assert rows[1].tier == "C" and rows[1].fid == "" and rows[1].cands == {"FAM-001"}
+
+
+def test_payer_known_for_two_families_does_not_corroborate_a_reference():
+    """A grandparent paying for two families: their key points at both, so it vouches for neither
+    a bare reference nor a bare payment."""
+    r = roster(FAM_001=("HASANOVIC", "Elodie", "2026-001"), FAM_002=("KOWALSKI", "Jan", "2026-002"))
+    rows = allocate([
+        receipt("GRANDMA JONES", "HASANOVIC 2026-001", r=4),
+        receipt("GRANDMA JONES", "KOWALSKI 2026-002", r=5),
+        receipt("GRANDMA JONES", "2026-002", r=6),
+        receipt("GRANDMA JONES", "final instalment", r=7),
+    ], r, CFG)
+    assert [(x.tier, x.fid) for x in rows[:2]] == [("A", "FAM-001"), ("A", "FAM-002")]
+    assert rows[2].tier == "C" and rows[2].fid == "" and rows[2].cands == {"FAM-002"}
+    assert rows[3].tier == "D" and rows[3].fid == ""
+
+
+def test_held_back_reference_to_another_family_blocks_the_alias():
+    """A payer confirmed for one family who then quotes another family's invoice number: the
+    conflicting line is held for review, and so is their next bare payment - the alias must not
+    quietly pick the first family while the engine has just flagged a second one."""
+    r = roster(FAM_040=("SMITH", "Ann", "2026-040"), FAM_041=("OTHER", "Bo", "2026-041"))
+    rows = allocate([
+        receipt("NANA P", "SMITH 2026-040", r=4),
+        receipt("NANA P", "2026-041", r=5),
+        receipt("NANA P", "final instalment", r=6),
+    ], r, CFG)
+    assert (rows[0].tier, rows[0].fid) == ("A", "FAM-040")
+    assert rows[1].tier == "C" and rows[1].fid == "" and rows[1].cands == {"FAM-041"}
+    assert rows[2].tier == "D" and rows[2].fid == ""
+
+
+def test_unsupported_reference_still_shows_the_family_the_memo_does_fit():
+    """Fuzzy evidence for a different family is not a contradiction (that is tier X, exact surname
+    only), but the reviewer should see it next to the held-back reference."""
+    r = roster(FAM_010=("VANTERPOOL", "Halima", "2026-010"), FAM_011=("QUILLIAM", "Ulrich", "2026-011"))
+    [x] = allocate([receipt("SOMEONE", "ULRICH 2026-010")], r, CFG)
+    assert x.tier == "C" and x.fid == "" and x.cands == {"FAM-010"}
+    assert "nothing else in the memo supports it" in x.why
+    assert x.why.endswith("  -  memo also fits FAM-011 (child first name Ulrich)")
+
+
 def test_alias_learned_from_reference_matches_a_later_bare_payment():
     """Confirm a payer once by reference; their next payment with no reference at all follows."""
     r = roster(FAM_030=("MAALOUF", "Genevieve", "2026-030"))
@@ -133,7 +259,7 @@ def test_alias_is_not_learned_from_an_ambiguous_payer_key():
     """A very short payer key must not become an alias, whatever it paid for."""
     r = roster(FAM_001=("HASANOVIC", "Elodie", "2026-001"))
     rows = allocate([
-        receipt("ABC", "2026-001", r=4),
+        receipt("ABC", "HASANOVIC 2026-001", r=4),
         receipt("ABC", "no reference here", r=5),
     ], r, CFG)
     assert rows[0].tier == "A"

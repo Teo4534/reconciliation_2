@@ -7,11 +7,14 @@ writes the result back out.
 
 Tiers, highest evidence first, first hit wins:
     M  manual override typed into the Receipts sheet                      -> allocated
-    A  current-term invoice reference naming exactly one family, not
-       contradicted by a surname in the memo; or a payer name already
+    A  current-term invoice reference naming exactly one family,
+       corroborated: something else in the memo agrees with it (a
+       surname, even truncated or misspelt, or a child's name) or the
+       payer is already known for that family; or a payer name already
        seen with a verified reference (an alias)                          -> allocated
     B  exactly one roster surname found in the memo                       -> allocated
-    C  fuzzy evidence: truncated or misspelt surname, or a child's name   -> review
+    C  fuzzy evidence: truncated or misspelt surname, or a child's name;
+       or a reference that nothing else in the memo supports              -> review
     D  nothing usable, or several families fit                            -> review
     X  the reference and the memo point to different families            -> review
 """
@@ -67,7 +70,20 @@ def norm(x) -> str:
 
 
 def tokens(text) -> list[str]:
-    return [t for t in re.findall(r"[A-Z]{3,}", norm(text)) if t not in STOP_WORDS]
+    """Words of three or more letters, stop words dropped. An apostrophe after a single leading
+    letter is removed, so M'BOLO and O'BRIEN read MBOLO and OBRIEN as surname_parts() indexes them;
+    every other apostrophe stays a word boundary, so ADAM'S yields ADAM and never the surname ADAMS.
+    Typographic apostrophes count as apostrophes (norm() would otherwise drop them and glue)."""
+    text = norm(re.sub("[\u2018\u2019\u02bc]", "'", str(text or "")))
+    text = re.sub(r"\b([A-Z])'(?=[A-Z])", r"\1", text)
+    return [t for t in re.findall(r"[A-Z]{3,}", text) if t not in STOP_WORDS]
+
+
+def surname_parts(sur) -> list[str]:
+    """Index keys for a surname: split on hyphens and spaces, keep letters only, drop parts under
+    three letters. M'BOLO and O'BRIEN index as MBOLO and OBRIEN, which is what tokens() yields."""
+    parts = (re.sub(r"[^A-Z]", "", p) for p in re.split(r"[-\s]", norm(sur)))
+    return [p for p in parts if len(p) >= 3]
 
 
 def payer_key(payer) -> str:
@@ -109,9 +125,8 @@ def load_roster(wb, cfg: Config) -> Roster:
         _cid, fid, sur, first, _cls, status, term, inv = row[:8]
         invoiced = row[18]
         invoiced = float(invoiced) if isinstance(invoiced, (int, float)) else 0.0
-        for part in re.split(r"[-\s]", norm(sur)):
-            if len(part) >= 3:
-                r.sur_index[part].add(fid)
+        for part in surname_parts(sur):
+            r.sur_index[part].add(fid)
         for fn in re.split(r"[-\s]", norm(first)):
             if len(fn) >= 4:
                 first_count[fn] += 1
@@ -230,6 +245,7 @@ class Receipt:
     override: str
     note: str
     named: set = field(default_factory=set)     # families named by an exact surname in the memo
+    ev: dict = field(default_factory=dict)      # evidence(memo): fid -> signals, computed once in allocate()
     tier: str = ""
     fid: str = ""
     why: str = ""
@@ -271,20 +287,25 @@ def read_receipts(ws, cfg: Config) -> list[Receipt]:
 def allocate(rows: list[Receipt], roster: Roster, cfg: Config) -> list[Receipt]:
     """Assign a tier, family and reason to every receipt. Two passes:
 
-    1. references and overrides, which also teach us payer aliases
+    1. references and overrides, which also teach us payer aliases. A reference allocates only
+       when corroborated: the memo carries some evidence for the same family, or the payer is
+       already a usable alias for it (seeded, or learned from an earlier row in this pass).
     2. names, for everything still open, using the aliases learned in pass 1
     """
     alias = defaultdict(set)
     for k, v in roster.alias_seed.items():
         alias[k] |= v
+    unconfirmed = defaultdict(set)   # payer key -> families whose reference it quoted uncorroborated
 
     for x in rows:
-        x.named = families_named(evidence(x.memo, roster, cfg))
+        x.ev = evidence(x.memo, roster, cfg)
+        x.named = families_named(x.ev)
         x.tier = x.fid = x.why = ""
         x.cands = set()
+        pk = payer_key(x.payer)
         if x.override:
             x.tier, x.fid, x.why = "M", x.override, "manual override"
-            alias[payer_key(x.payer)].add(x.override)
+            alias[pk].add(x.override)
             continue
         if not x.cur_ref:
             continue
@@ -297,16 +318,26 @@ def allocate(rows: list[Receipt], roster: Roster, cfg: Config) -> list[Receipt]:
                 x.tier, x.cands = "X", x.named | {cand}
                 x.why = (f"reference {x.cur_ref} points to {cand} but the memo names "
                          + ", ".join(sorted(x.named)) + "  -  parent may have typed the wrong invoice number")
-            else:
+            elif cand in x.ev or known_families(alias, pk, cfg) == {cand}:
                 x.tier, x.fid, x.why = "A", cand, f"invoice reference {x.cur_ref}"
-                alias[payer_key(x.payer)].add(cand)
+                alias[pk].add(cand)
+            else:
+                x.tier, x.cands = "C", {cand}
+                x.why = (f"invoice reference {x.cur_ref} points to {cand} but nothing else in the memo "
+                         "supports it  -  confirm, and later payments from this payer will follow")
+                if x.ev:   # fuzzy evidence for some other family: not a contradiction, but worth seeing
+                    x.why += "  -  memo also fits " + "; ".join(
+                        f"{f} ({', '.join(sorted(set(x.ev[f])))})" for f in sorted(x.ev))
+                unconfirmed[pk].add(cand)
         elif len(fams) > 1:
             x.tier, x.cands, x.why = "D", fams, f"reference {x.cur_ref} is shared by " + ", ".join(sorted(fams))
         else:
             x.why = f"reference {x.cur_ref} not in roster"
 
-    # only keep aliases that are long enough to be distinctive and point at exactly one family
-    alias = {k: v for k, v in alias.items() if len(k) >= cfg.min_alias_len and len(v) == 1}
+    # only keep aliases that are long enough to be distinctive, point at exactly one family, and
+    # never quoted another family's reference (a grandparent paying for two families)
+    alias = {k: v for k, v in alias.items()
+             if known_families(alias, k, cfg) == v and len(v) == 1 and not (unconfirmed.get(k, set()) - v)}
 
     for x in rows:
         if x.tier:
@@ -316,7 +347,7 @@ def allocate(rows: list[Receipt], roster: Roster, cfg: Config) -> list[Receipt]:
             x.tier, x.fid = "A", next(iter(alias[pk]))
             x.why = _join(x.why, "payer name previously seen with a verified reference for this family")
         else:
-            tier, fid, cands, why = decide(evidence(x.memo, roster, cfg), roster)
+            tier, fid, cands, why = decide(x.ev, roster)
             if tier == "D" and not cands and x.note:
                 tier, fid, cands, why = decide(evidence(x.note, roster, cfg), roster,
                                                " (from the bank-sheet note, not the memo)")
@@ -329,6 +360,11 @@ def allocate(rows: list[Receipt], roster: Roster, cfg: Config) -> list[Receipt]:
         single = next(iter(x.cands)) if len(x.cands) == 1 else ""
         x.amt = amount_check(x.amount, x.fid or single, x.term, roster, cfg)
     return rows
+
+
+def known_families(alias: dict, pk: str, cfg: Config) -> set:
+    """Families a payer key already stands for, or nothing if the key is too short to trust."""
+    return set(alias.get(pk, set())) if len(pk) >= cfg.min_alias_len else set()
 
 
 def _join(existing: str, extra: str) -> str:
