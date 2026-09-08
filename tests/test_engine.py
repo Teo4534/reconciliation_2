@@ -153,6 +153,143 @@ def test_reference_agreeing_with_memo_is_tier_a():
     assert (x.tier, x.fid) == ("A", "FAM-047")
 
 
+# ------------------------------------------------------------------ strictly richer surname evidence
+
+def test_hits_is_the_per_token_view_that_evidence_folds():
+    """evidence() is hits() folded per family: one matching loop, two views of it. part is the
+    roster surname part the token matched - the token itself when the hit is exact, and '' for a
+    child's first name, which is not surname evidence and so cannot make one family's evidence
+    contain another's."""
+    from engine import by_family, hits
+    r = roster(FAM_002=("NAKASHIMA-PELLETIER", "Ida", "2026-003"), FAM_038=("NAKASHIMA", "Bo", "2026-008"))
+    found = hits("IDA NAKASHIMA-PELLET", r, CFG)
+    assert ("NAKASHIMA", "NAKASHIMA", "FAM-002", "surname NAKASHIMA") in found
+    assert ("NAKASHIMA", "NAKASHIMA", "FAM-038", "surname NAKASHIMA") in found
+    assert ("PELLET", "PELLETIER", "FAM-002", "'PELLET' starts PELLETIER") in found
+    assert ("IDA", "", "FAM-002", "child first name Ida") in found
+    assert by_family(found) == evidence("IDA NAKASHIMA-PELLET", r, CFG)
+
+
+def test_truncated_compound_surname_contradicts_a_shared_reference():
+    """The bank truncates the payer field at 23 characters, so NAKASHIMA-PELLETIER arrives as
+    NAKASHIMA-PELLET. The shared reference narrows to the NAKASHIMA family, which the memo does
+    name - but PELLET starts PELLETIER, so the compound family's surname evidence strictly
+    contains the referenced family's: the memo describes that family and more."""
+    r = roster(FAM_002=("NAKASHIMA-PELLETIER", "Ida", "2026-003"),
+               FAM_038=("NAKASHIMA", "Bo", "2026-008"),
+               FAM_007=("BAPTISTE", "Ann", "2026-008"))
+    [x] = allocate([receipt("MARGIT NAKASHIMA-PELLET", "MARGIT NAKASHIMA-PELLET 2026-008")], r, CFG)
+    assert x.tier == "X" and x.fid == ""
+    assert {"FAM-002", "FAM-038"} <= x.cands
+    assert "may have typed the wrong invoice number" in x.why
+
+
+def test_truncated_compound_surname_contradicts_an_unshared_reference():
+    """The same hole with no shared reference: the number resolves to one family on its own."""
+    r = roster(FAM_002=("NAKASHIMA-PELLETIER", "Ida", "2026-003"),
+               FAM_038=("NAKASHIMA", "Bo", "2026-038"))
+    [x] = allocate([receipt("MARGIT NAKASHIMA-PELLET", "MARGIT NAKASHIMA-PELLET 2026-038")], r, CFG)
+    assert x.tier == "X" and x.fid == ""
+    assert x.cands == {"FAM-002", "FAM-038"}
+
+
+def test_full_compound_surname_contradicts_a_reference_to_one_of_its_parts():
+    """Untruncated, both parts are exact hits. The family bearing both contradicts a reference to
+    either one; the family bearing only the other part does not, because its evidence is different
+    words, not more of the same ones."""
+    r = roster(FAM_002=("NAKASHIMA-PELLETIER", "Ida", "2026-003"),
+               FAM_038=("NAKASHIMA", "Bo", "2026-038"),
+               FAM_043=("PELLETIER", "Cy", "2026-043"))
+    [x] = allocate([receipt("MARGIT NAKASHIMA-PELLETIER", "MARGIT NAKASHIMA-PELLETIER 2026-038")], r, CFG)
+    assert x.tier == "X" and x.fid == ""
+    assert "FAM-002" in x.cands
+    assert "FAM-043" not in x.cands
+
+
+def test_a_contradicted_reference_still_teaches_the_payer_alias():
+    """Holding one row back must not re-route the rest of the pass: the payer key still stands for
+    the family its reference named, so the next row decides on exactly the aliases it did before.
+    Here row 5 names QUILLIAM outright and still follows the alias, as it always has."""
+    r = roster(FAM_001=("ACHTERBERG-MARCHETTI", "Ida", "2026-001"), FAM_002=("ACHTERBERG", "Bo", "2026-002"),
+               FAM_003=("MARCHETTI", "Cy", "2026-003"), FAM_004=("QUILLIAM", "Kai", "2026-004"))
+    rows = allocate([
+        receipt("ADRIEN ACHTERBERG-MARCHETTI", "ADRIEN ACHTERBERG-MARCHETTI 2026-002", r=4),
+        receipt("ADRIEN ACHTERBERG-MARCHETTI", "QUILLIAM school fees", r=5),
+    ], r, CFG)
+    assert (rows[1].tier, rows[1].fid) == ("A", "FAM-002")
+
+
+def test_a_payers_own_truncated_surname_does_not_contradict_their_reference():
+    """SANDOV NILS is the Sandoval family, truncated by the bank, quoting their own number. No
+    other family's evidence contains theirs, so the reference stands and teaches the alias that
+    carries their next payment - even one that mentions another family's surname."""
+    r = roster(FAM_001=("SANDOVAL", "Ida", "2026-001"), FAM_002=("NAKASHIMA", "Bo", "2026-002"))
+    rows = allocate([
+        receipt("SANDOV NILS", "SANDOV NILS 2026-001", r=4),
+        receipt("SANDOV NILS", "SANDOV NILS NAKASHIMA SCHOOL", r=5),
+    ], r, CFG)
+    assert [(x.tier, x.fid) for x in rows] == [("A", "FAM-001"), ("A", "FAM-001")]
+
+
+def test_a_truncated_or_misspelt_surname_still_corroborates_its_own_reference():
+    """Fuzzy evidence for the referenced family is still corroboration, not a contradiction."""
+    r = roster(FAM_001=("WOJCIECHOWSKI", "Ada", "2026-001"), FAM_002=("DZIEDZIC", "Bo", "2026-002"))
+    [x] = allocate([receipt("WOJCIECHOWSK ORLA", "WOJCIECHOWSK ORLA 2026-001")], r, CFG)
+    assert (x.tier, x.fid) == ("A", "FAM-001")
+    [y] = allocate([receipt("DZIEDZIK ORLA", "DZIEDZIK ORLA 2026-002")], r, CFG)
+    assert (y.tier, y.fid) == ("A", "FAM-002")
+
+
+def test_a_truncated_surname_then_another_familys_name_follows_the_alias():
+    r = roster(FAM_001=("SMITHSON", "Bo", "2026-001"), FAM_002=("MARTINEZ", "Ada", "2026-002"))
+    rows = allocate([
+        receipt("SMITHSO BO", "SMITHSO BO 2026-001", r=4),
+        receipt("SMITHSO BO", "SMITHSO BO MARTINEZ", r=5),
+    ], r, CFG)
+    assert [(x.tier, x.fid) for x in rows] == [("A", "FAM-001"), ("A", "FAM-001")]
+
+
+def test_two_surnames_neither_containing_the_other_is_not_a_richer_contradiction():
+    """SMITH and DUPONT are different words: neither explains the other's evidence, so a reference
+    to DUPONT in a memo carrying both is corroborated, not contradicted. Only the row whose memo
+    names SMITH alone against a DUPONT reference is tier X, on the older exact-surname test."""
+    r = roster(FAM_001=("DUPONT", "Ida", "2026-001"), FAM_002=("SMITH", "Bo", "2026-002"))
+    rows = allocate([
+        receipt("JOHN SMITH", "JOHN SMITH DUPONT 2026-001", r=4),
+        receipt("JOHN SMITH", "JOHN SMITH 2026-001", r=5),
+        receipt("JOHN SMITH", "JOHN SMITH payment", r=6),
+    ], r, CFG)
+    assert [(x.tier, x.fid) for x in rows] == [("A", "FAM-001"), ("X", ""), ("A", "FAM-001")]
+
+
+def test_a_first_name_brushing_another_surname_does_not_contradict_a_reference():
+    """NILS starts NILSSON and MARIE starts MARIETTE, but neither carries the DZIEDZIC hit the
+    reference leans on, so neither family's evidence contains the referenced family's."""
+    r = roster(FAM_057=("DZIEDZIC", "Ada", "2026-057"), FAM_060=("NILSSON", "Ann", "2026-060"))
+    [x] = allocate([receipt("MR NILS DZIEDZIC", "MR NILS DZIEDZIC 2026-057")], r, CFG)
+    assert (x.tier, x.fid) == ("A", "FAM-057")
+    r = roster(FAM_057=("DZIEDZIC", "Ada", "2026-057"), FAM_018=("MARIETTE", "Ann", "2026-018"))
+    [y] = allocate([receipt("MARIE-CLAIRE DZIEDZIC", "MARIE-CLAIRE DZIEDZIC 2026-057")], r, CFG)
+    assert (y.tier, y.fid) == ("A", "FAM-057")
+
+
+def test_a_stray_word_starting_a_surname_does_not_contradict_a_reference():
+    """MARCH starts MARCHETTI. That family's evidence does not contain the Achterbergs', so a
+    memo saying MARCH FEES cannot hold up their reference."""
+    r = roster(FAM_002=("ACHTERBERG", "Bo", "2026-002"), FAM_031=("MARCHETTI", "Cy", "2026-031"))
+    [x] = allocate([receipt("ADRIEN ACHTERBERG", "ADRIEN ACHTERBERG 2026-002 MARCH FEES")], r, CFG)
+    assert (x.tier, x.fid) == ("A", "FAM-002")
+
+
+def test_equal_surname_evidence_is_settled_by_the_reference_not_contradicted():
+    """SANDOVAL hits the Sandovals and the Sandoval Zabalas identically: equal, not strictly
+    richer, so the reference still decides between them and the payment allocates."""
+    r = roster(FAM_040=("SANDOVAL", "Hugo", "2026-040"), FAM_004=("SANDOVAL ZABALA", "Kai", "2026-004"),
+               FAM_050=("ZABALA", "Nils", "2026-050"))
+    [x] = allocate([receipt("HUGO SANDOVAL", "HUGO SANDOVAL 2026-040")], r, CFG)
+    assert (x.tier, x.fid) == ("A", "FAM-040")
+
+
 def test_reference_from_a_payer_matching_nobody_is_not_allocated():
     """A reference alone is not enough: nothing in the memo or the payer ties it to the family,
     so it goes to review, and no alias is learned that would drag the next instalment along."""

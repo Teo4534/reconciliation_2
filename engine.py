@@ -16,7 +16,10 @@ Tiers, highest evidence first, first hit wins:
     C  fuzzy evidence: truncated or misspelt surname, or a child's name;
        or a reference that nothing else in the memo supports              -> review
     D  nothing usable, or several families fit                            -> review
-    X  the reference and the memo point to different families            -> review
+    X  the reference and the memo point to different families, either
+       because the memo names other families outright or because another
+       family's surname evidence strictly contains the referenced
+       family's, so the memo describes that family and more              -> review
 """
 from __future__ import annotations
 
@@ -142,28 +145,69 @@ def load_roster(wb, cfg: Config) -> Roster:
 
 # ----------------------------------------------------------------------------- evidence
 
-def evidence(text, roster: Roster, cfg: Config) -> dict[str, list[str]]:
-    """fid -> the signals found in text: exact surname parts, unique child first names, fuzzy hits."""
-    ev = defaultdict(list)
+def hits(text, roster: Roster, cfg: Config) -> list[tuple[str, str, str, str]]:
+    """Every (token, part, fid, signal) the text produces against the roster: an exact surname
+    part, a unique child's first name, or a fuzzy hit (the token starts a surname part, misspells
+    it, or contains it). part is the roster surname part the token matched - the token itself when
+    the hit is exact, and '' for a child's first name, which is not surname evidence. The only
+    place the text is matched against the roster; evidence() folds this per family."""
+    out = []
     sur_parts = roster.sur_parts
     for t in tokens(text):
         if t in roster.sur_index:
             for f in roster.sur_index[t]:
-                ev[f].append(f"surname {t}")
+                out.append((t, t, f, f"surname {t}"))
             continue
         if t in roster.unique_first:
-            ev[roster.unique_first[t]].append(f"child first name {t.title()}")
+            out.append((t, "", roster.unique_first[t], f"child first name {t.title()}"))
         for p in sur_parts:
             if p.startswith(t) and len(t) >= 4:
                 for f in roster.sur_index[p]:
-                    ev[f].append(f"'{t}' starts {p}")
+                    out.append((t, p, f, f"'{t}' starts {p}"))
             elif len(t) >= 5 and SequenceMatcher(None, t, p).ratio() >= cfg.fuzzy_ratio:
                 for f in roster.sur_index[p]:
-                    ev[f].append(f"'{t}' ~ {p}")
+                    out.append((t, p, f, f"'{t}' ~ {p}"))
             elif len(t) >= 8 and p in t:
                 for f in roster.sur_index[p]:
-                    ev[f].append(f"{p} inside '{t}'")
+                    out.append((t, p, f, f"{p} inside '{t}'"))
+    return out
+
+
+def by_family(found: list[tuple[str, str, str, str]]) -> dict[str, list[str]]:
+    """Fold hits into fid -> signals, in the order the text produced them."""
+    ev = defaultdict(list)
+    for _t, _part, f, sig in found:
+        ev[f].append(sig)
     return ev
+
+
+def evidence(text, roster: Roster, cfg: Config) -> dict[str, list[str]]:
+    """fid -> the signals found in text: exact surname parts, unique child first names, fuzzy hits."""
+    return by_family(hits(text, roster, cfg))
+
+
+def surname_pairs(found: list[tuple[str, str, str, str]]) -> dict[str, set[tuple[str, str]]]:
+    """fid -> the (token, roster surname part) pairs behind its surname evidence in this text. A
+    child's first name (part '') is left out: it says nothing about a surname. How much of a part
+    a token covers is not weighed, so how far the bank truncated a compound surname - PELLET,
+    PELLE, PELL - does not decide whether the compound family is seen at all."""
+    pairs = defaultdict(set)
+    for t, part, f, _sig in found:
+        if part:
+            pairs[f].add((t, part))
+    return pairs
+
+
+def richer_families(found: list[tuple[str, str, str, str]], cand: str) -> set[str]:
+    """Families whose surname evidence strictly contains cand's, so the memo says everything it
+    says for cand and more: NAKASHIMA-PELLETIER, hit by NAKASHIMA and by PELLET, over NAKASHIMA,
+    hit by NAKASHIMA alone. Equal evidence is not richer (SANDOVAL against SANDOVAL ZABALA, which
+    the reference is left to settle), and different words are not richer (SMITH against DUPONT).
+    A family the memo offers nothing for has nothing to contain, so a reference with no name
+    support is never contradicted this way: that is tier C's business, not this rule's."""
+    pairs = surname_pairs(found)
+    own = pairs.get(cand, set())
+    return {f for f, ps in pairs.items() if f != cand and ps > own} if own else set()
 
 
 def families_named(ev) -> set[str]:
@@ -298,7 +342,8 @@ def allocate(rows: list[Receipt], roster: Roster, cfg: Config) -> list[Receipt]:
     unconfirmed = defaultdict(set)   # payer key -> families whose reference it quoted uncorroborated
 
     for x in rows:
-        x.ev = evidence(x.memo, roster, cfg)
+        found = hits(x.memo, roster, cfg)
+        x.ev = by_family(found)
         x.named = families_named(x.ev)
         x.tier = x.fid = x.why = ""
         x.cands = set()
@@ -314,10 +359,17 @@ def allocate(rows: list[Receipt], roster: Roster, cfg: Config) -> list[Receipt]:
             fams = fams & x.named
         if len(fams) == 1:
             cand = next(iter(fams))
+            richer = richer_families(found, cand)
             if x.named and cand not in x.named:
                 x.tier, x.cands = "X", x.named | {cand}
-                x.why = (f"reference {x.cur_ref} points to {cand} but the memo names "
-                         + ", ".join(sorted(x.named)) + "  -  parent may have typed the wrong invoice number")
+                x.why = wrong_number(x.cur_ref, cand, x.named)
+            elif richer:
+                x.tier, x.cands = "X", richer | {cand}
+                x.why = wrong_number(x.cur_ref, cand, richer)
+                # The payer still learns cand, exactly as it would have without this rule: what is
+                # held back is this row, not the rest of the pass. Every other row then decides on
+                # the same aliases as before, so this rule only ever subtracts an allocation.
+                alias[pk].add(cand)
             elif cand in x.ev or known_families(alias, pk, cfg) == {cand}:
                 x.tier, x.fid, x.why = "A", cand, f"invoice reference {x.cur_ref}"
                 alias[pk].add(cand)
@@ -360,6 +412,14 @@ def allocate(rows: list[Receipt], roster: Roster, cfg: Config) -> list[Receipt]:
         single = next(iter(x.cands)) if len(x.cands) == 1 else ""
         x.amt = amount_check(x.amount, x.fid or single, x.term, roster, cfg)
     return rows
+
+
+def wrong_number(cur_ref: str, cand: str, against: set) -> str:
+    """Tier X's reason: the reference says one family, the memo says these others. One template,
+    whether the memo names them outright or describes one of them more fully than the referenced
+    family, so both kinds of contradiction read the same in the review queue."""
+    return (f"reference {cur_ref} points to {cand} but the memo names " + ", ".join(sorted(against))
+            + "  -  parent may have typed the wrong invoice number")
 
 
 def known_families(alias: dict, pk: str, cfg: Config) -> set:
