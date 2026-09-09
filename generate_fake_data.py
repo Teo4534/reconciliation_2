@@ -86,6 +86,11 @@ for i, fam in enumerate(families):
     per_child_tuition = round(RATE[min(k, 4)] * SESSIONS_CUR / k, 2)
     for j, kid in enumerate(fam["kids"]):
         roster_rows.append({
+            # Which family the row belongs to. Not a roster column: the DataFrame below is built
+            # with an explicit column list, so this is dropped before anything is written out. It
+            # exists because two families can share an invoice number, so the number cannot be
+            # used to group a family's rows.
+            "_fam": i,
             "Statut:": "Inscrit",
             "LES ELEVES": f"{fam['sur'].upper()} {kid}",
             "INVOICE NUMBER": inv_numbers[i] + ("a" if j == 0 and k > 1 else ""),
@@ -107,7 +112,12 @@ def memo(payer, ref):
 
 
 def expected_total(i):
-    rows = [r for r in roster_rows if str(r["INVOICE NUMBER"]).rstrip("a") == inv_numbers[i]]
+    """What family i was invoiced: its own children's rows only.
+
+    Grouping by invoice number instead would bill one family for two, because shared_a and
+    shared_b are deliberately issued the same number.
+    """
+    rows = [r for r in roster_rows if r["_fam"] == i]
     tuition = sum(r["FEES"] or 0 for r in rows)
     extras = sum((r["OFFICE SUPPLIES"] or 0) + (r["REG FEES ONE OFF"] or 0) for r in rows)
     return round(tuition + extras, 2)
@@ -117,15 +127,32 @@ modes = [m for m, w in FAILURE_MODES for _ in range(w)]
 rng.shuffle(modes)
 bank, truth = [], []
 TERM_START = pd.Timestamp("2026-01-06")
-payers = [i for i in range(n_families) if expected_total(i) > 0]
+def has_invoice(i):
+    """Was family i actually issued an invoice number this term?
+
+    One child is deliberately left with no invoice number and no fee, to reproduce a roster the
+    office really did send. A family in that state cannot quote a reference it was never given,
+    so it does not pay: otherwise the generator emits a 'clean' reference that is not in the
+    roster, which is a different failure mode than the one it is labelled with.
+    """
+    return any(str(r["INVOICE NUMBER"]).strip() for r in roster_rows if r["_fam"] == i)
+
+
+payers = [i for i in range(n_families) if expected_total(i) > 0 and has_invoice(i)]
 for idx, i in enumerate(rng.sample(payers, min(len(modes), len(payers)))):
-    fam = families[i]
     mode = modes[idx]
-    payer_full = f"{fam['parent']} {fam['sur']}".upper()
-    payer = strip_accents(payer_full)
+    part = rng.random() < 0.30
+    if mode == "shared_invoice":
+        # Two unrelated families were issued the same invoice number. Pick one of them and let it
+        # pay its own invoice, so the payer's name is genuinely theirs and only the number is
+        # ambiguous. The family has to be chosen before anything is derived from it: choosing
+        # afterwards would leave the payer, the amount and the answer key belonging to a third
+        # family, which is the wrong_ref case wearing this label.
+        i = rng.choice([shared_a, shared_b])
+    fam = families[i]
+    payer = strip_accents(f"{fam['parent']} {fam['sur']}".upper())
     ref_clean = inv_numbers[i]
     total = expected_total(i)
-    part = rng.random() < 0.30
     amount = round(total / 2, 2) if part else total
 
     if mode == "clean":
@@ -147,8 +174,7 @@ for idx, i in enumerate(rng.sample(payers, min(len(modes), len(payers)))):
     elif mode == "truncated":
         ref = f"{fam['sur'].upper()} FRENCH SCHOOL {ref_clean}"[:21]
     elif mode == "shared_invoice":
-        ref = inv_numbers[shared_a]
-        i = rng.choice([shared_a, shared_b])
+        ref = ref_clean          # correct for this family, and also correct for another one
 
     day = TERM_START + pd.Timedelta(days=rng.randint(0, 120))
     bank.append([day, amount, memo(payer, ref), "Registration fees", None, None])

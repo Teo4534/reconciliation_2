@@ -1,8 +1,8 @@
 date,amount,payer,reference,failure_mode,true_family,true_invoice
 2026-04-25,1041.0,ULRICH CARDOSO,CARDOSO FRENCH SCHOOL,truncated,Cardoso,2026-011
 2026-02-17,774.5,ULRICH QUILLIAM,school fees,name_only,Quilliam,2026-037
-2026-05-01,592.0,MARGIT PELLETIER,2025-627,prior_term,Pelletier,2026-008
-2026-05-28,592.0,MARGIT PELLETIER,Pelletier 2nd,prior_term+instalment,Pelletier,2026-008
+2026-05-01,204.75,MARGIT PELLETIER,2025-627,prior_term,Pelletier,2026-008
+2026-05-28,204.75,MARGIT PELLETIER,Pelletier 2nd,prior_term+instalment,Pelletier,2026-008
 2026-04-02,434.5,MARGIT WENDELIN,2026-047,clean,Wendelin,2026-047
 2026-01-26,387.25,GENEVIEVE MAALOUF,MAALOU2026-030,glued,Maalouf,2026-030
 2026-02-10,387.25,GENEVIEVE MAALOUF,2nd payment,glued+instalment,Maalouf,2026-030
@@ -26,11 +26,11 @@ date,amount,payer,reference,failure_mode,true_family,true_invoice
 2026-02-16,409.5,MARGIT NWACHUKWU,Giulia,first_name_only,Nwachukwu,2026-033
 2026-04-11,217.25,CAMILLE FERREIRO,2025-503,prior_term,Ferreiro,2026-058
 2026-05-02,217.25,CAMILLE FERREIRO,Ferreiro 2nd,prior_term+instalment,Ferreiro,2026-058
-2026-01-20,1184.0,GENEVIEVE BELHADJ,2026-008,shared_invoice,Belhadj,2026-008
+2026-01-20,409.5,MARGIT PELLETIER,2026-008,shared_invoice,Pelletier,2026-008
 2026-03-22,409.5,INGRID ABARCA,2026-004,clean,Abarca,2026-004
 2026-02-18,799.5,ULRICH TREVELYAN,Trevelyan,name_only,Trevelyan,2026-043
-2026-04-21,347.0,TOVE CHIDOZIE,CHIDOZIE FRENCH SCHOO,truncated,Chidozie,2026-012
-2026-05-26,347.0,TOVE CHIDOZIE,Chidozie,truncated+instalment,Chidozie,2026-012
+2026-04-21,359.5,TOVE CHIDOZIE,CHIDOZIE FRENCH SCHOO,truncated,Chidozie,2026-012
+2026-05-26,359.5,TOVE CHIDOZIE,Chidozie,truncated+instalment,Chidozie,2026-012
 2026-02-07,409.5,BETTINA VILLALOBOS,2025-578,prior_term,Villalobos,2026-046
 2026-04-26,434.5,NILS BLOMFIELD,BLOMFIELD FRENCH SCHO,truncated,Blomfield,2026-010
 2026-04-06,774.5,HUGO SANDOVAL,2026-040,clean,Sandoval,2026-040
@@ -59,7 +59,7 @@ date,amount,payer,reference,failure_mode,true_family,true_invoice
 2026-02-04,434.5,NILS DZIEDZIC,2026057,no_hyphen,Dziedzic,2026-057
 2026-04-26,1041.0,ELODIE KACZMAREK,2026026,no_hyphen,Kaczmarek,2026-026
 2026-02-22,1041.0,PASCAL GRIMALDSEN,Grimaldsen fees,name_only,Grimaldsen,2026-059
-2026-02-17,434.5,KATRIN BEAUCHAMP,2026-008,shared_invoice,Beauchamp,2026-007
+2026-02-17,774.5,GENEVIEVE BELHADJ,2026-008,shared_invoice,Belhadj,2026-008
 2026-04-09,434.5,ELODIE ROCHETEAU,039,bare,Rocheteau,2026-039
 2026-03-30,374.75,STEFAN BOSANQUET,053,bare,Bosanquet,2026-053
 2026-04-20,374.75,STEFAN BOSANQUET,2026-053,bare+instalment,Bosanquet,2026-053

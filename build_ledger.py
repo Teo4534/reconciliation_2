@@ -1,10 +1,13 @@
 """
 build_ledger.py - turn a pupil roster and a bank export into a structured fee ledger.
 
-    python build_ledger.py <roster.xlsx> <bank.xlsx> <ledger_out.xlsx>
+    python build_ledger.py <roster.xlsx> <bank.xlsx> <ledger_out.xlsx> [--term JAN-2026]
 
 Writes Rates, Terms, Families, Children and Receipts. The fee rules live in Rates as data,
 so a price change is a cell edit, not a code change. Run reconcile.py next to allocate receipts.
+
+Every term-specific fact lives in terms.py. Running a different term is a --term argument, not an
+edit: nothing in this file names a year.
 """
 import re, sys, unicodedata
 from collections import defaultdict
@@ -16,10 +19,36 @@ from openpyxl.formatting.rule import FormulaRule, CellIsRule
 from openpyxl.utils import get_column_letter
 from openpyxl.comments import Comment
 
-ROSTER = sys.argv[1] if len(sys.argv) > 1 else "examples/roster.xlsx"
-BANK = sys.argv[2] if len(sys.argv) > 2 else "examples/bank.xlsx"
-OUT = sys.argv[3] if len(sys.argv) > 3 else "examples/fee_ledger.xlsx"
-TERM_CUR, TERM_PRIOR = "JAN-2026", "AUT-2025"
+from terms import default_term, resolve
+
+def parse_args(argv):
+    """Split '<roster> <bank> <out> [--term ID]' into three paths and the chosen term entry.
+
+    The term defaults to terms.default_term(), so existing commands keep working. The entry before
+    the chosen one is the prior term, which is what receipts are compared against.
+    """
+    paths, want = [], default_term()
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--term":
+            if i + 1 >= len(argv):
+                sys.exit("--term needs a term ID, e.g. --term JAN-2026")
+            want, i = argv[i + 1], i + 2
+            continue
+        paths.append(argv[i])
+        i += 1
+    while len(paths) < 3:
+        paths.append(["examples/roster.xlsx", "examples/bank.xlsx", "examples/fee_ledger.xlsx"][len(paths)])
+    try:
+        prior, cur = resolve(want)
+    except ValueError as e:
+        sys.exit(str(e))
+    return paths[0], paths[1], paths[2], prior, cur
+
+
+ROSTER, BANK, OUT, PRIOR, CUR = parse_args(sys.argv[1:])
+TERM_CUR, TERM_PRIOR = CUR["id"], PRIOR["id"]
+YEAR_CUR, YEAR_PRIOR = TERM_CUR[-4:], TERM_PRIOR[-4:]
 
 def norm(x):
     return unicodedata.normalize("NFKD", str(x)).encode("ascii", "ignore").decode()
@@ -81,13 +110,6 @@ for i, r in s.iterrows():
                      paid=paid, note=note))
 ch = pd.DataFrame(rows)
 
-# hand-resolved overrides where the roster amount implies a non-standard session count
-def set_override(mask, sessions, why):
-    ch.loc[mask, "sess_override"] = sessions
-    ch.loc[mask, "override_note"] = why
-set_override((ch.r_fees == 181.13), 10.5, "half of sibling share (£181.13)  -  joined mid-term? confirm")
-set_override((ch.r_fees == 546.0), 28, "£546 = 28 × £19.50  -  unexplained, confirm with office")
-
 # ---------------------------------------------------------------- families
 def same_family(a, b):
     a, b = norm(a), norm(b)
@@ -126,10 +148,27 @@ b.columns = names
 # test below as NaT and raises "'<' not supported between instances of 'NaTType' and 'int'".
 b = b.dropna(subset=["date", "amount"], how="all").reset_index(drop=True)
 CODE = re.compile(r"^(FT|BGC|BG|BBP|BP|B)$")
+# Reference spellings, built from the chosen term's year rather than written out: 2026-047 and
+# 2026047 for the current term, 2025-6xx and the two-digit forms parents use for the prior one.
+# engine.py builds the same patterns from its own Config; this copy exists because build_ledger.py
+# only needs to decide which term a receipt belongs to, never which family.
+CUR_REF_RE = re.compile(rf"{YEAR_CUR}\s*-?\s*(\d{{3}})")
+CUR_REF_SHORT_RE = re.compile(rf"(?<!\d){YEAR_CUR[2:]}(\d{{3}})(?!\d)")
+PRIOR_REF_RE = re.compile(rf"{YEAR_PRIOR}\s*-?\s*(\d{{3}})|(?<!\d)(2[1-4])\s*-?\s*(1\d\d)(?!\d)|(?<!\d)(2[1-4])(\d{{3}})(?!\d)")
+CUR_WINDOW_FROM = pd.Timestamp(CUR["start"])
 rec = []
-# JAN-2026 invoice totals. Used only to notice a prior-term reference sitting on a payment whose
-# amount and date say current term. Deciding which family a receipt belongs to is engine.py's job.
-cur_amounts = {409.5, 362.25, 724.5, 322.0, 966.0, 434.5, 459.5, 749.5, 774.5, 387.25, 372.25}
+# Current-term invoice totals, taken from the roster: each enrolled invoice's family total, half of it
+# (one sibling's share) and each enrolled child's own line. Used only to notice a prior-term
+# reference sitting on a payment whose amount and date say current term. Deciding which family a
+# receipt belongs to is engine.py's job.
+enr = ch[ch.status == "Enrolled"]
+child_tot = (enr.r_fees + enr.r_sup + enr.r_reg - enr.r_disc).round(2)
+# grouped by family as well as invoice: an invoice number shared by two families is two invoices
+inv_tot = child_tot.groupby([enr.fid, enr.inv]).sum().drop("", level=1, errors="ignore")
+cur_amounts = {float(x) for x in (*inv_tot, *(inv_tot / 2), *child_tot)}
+def is_cur_amount(amount, amounts):
+    """Decide whether a receipt amount equals one of the roster figures to the penny; a half-share's odd half-penny may have been rounded either way."""
+    return any(abs(amount - a) < 0.006 for a in amounts)
 for _, r in b.iterrows():
     memo = str(r.memo)
     payer = memo[:23].strip()
@@ -137,20 +176,20 @@ for _, r in b.iterrows():
     code = tail[-1] if tail and CODE.match(tail[-1]) else ""
     ref = " ".join(tail[:-1] if code else tail)
     M = norm(memo).upper()
-    m = re.search(r"2026\s*-?\s*(\d{3})", M) or re.search(r"(?<!\d)26(\d{3})(?!\d)", M)
-    cur_ref = f"2026-{m.group(1)}" if m else ""
-    pm = re.search(r"2025\s*-?\s*(\d{3})|(?<!\d)(2[1-4])\s*-?\s*(1\d\d)(?!\d)|(?<!\d)(2[1-4])(\d{3})(?!\d)", M)
+    m = CUR_REF_RE.search(M) or CUR_REF_SHORT_RE.search(M)
+    cur_ref = f"{YEAR_CUR}-{m.group(1)}" if m else ""
+    pm = PRIOR_REF_RE.search(M)
     prior_ref = pm.group(0) if (pm and not cur_ref) else ""
     # Which term a receipt belongs to is a property of the receipt, so it is settled here. Which
     # family it belongs to is a judgement on ranked evidence, and that lives in engine.py.
     if cur_ref: term = TERM_CUR
     elif prior_ref: term = TERM_PRIOR
-    else: term = TERM_PRIOR if r.date < pd.Timestamp("2025-12-15") else TERM_CUR
+    else: term = TERM_PRIOR if r.date < CUR_WINDOW_FROM else TERM_CUR
     flags = []
     if r.amount < 0: flags.append("outflow / refund")
     if len(memo) >= 44: flags.append("bank truncated the reference field")
-    if prior_ref and r.date >= pd.Timestamp("2026-01-01") and round(float(r.amount), 2) in cur_amounts:
-        flags.append("prior-term ref but 2026-term amount and date  -  parent may have reused old reference")
+    if prior_ref and r.date >= CUR_WINDOW_FROM and is_cur_amount(float(r.amount), cur_amounts):
+        flags.append(f"prior-term ref but {TERM_CUR} amount and date  -  parent may have reused old reference")
     extra = " | ".join(str(x).strip() for x in [r.note, r.extra] if pd.notna(x))
     rec.append(dict(date=r.date.date(), amount=float(r.amount), payer=payer, ref=ref, memo=memo,
                     term=term, flag="; ".join(flags), extra=extra))
@@ -184,6 +223,21 @@ ws = wb.active; ws.title = "README"
 shared_inv = sorted({k for k, v in groups.items() if k != "NOINV" and len(v) > 1})
 n_noinv = int((ch.inv == "").sum()); n_disc = int((ch.discount > 0).sum())
 n_out_of_seq = sorted({i for i in ch.inv if i and int(i.split("-")[1]) > 200})
+n_noinv_paid = int(((ch.inv == "") & (ch.paid != "")).sum())
+def plural(n, one, many):
+    """Decide the word form that agrees with a count: `one` when n == 1, else `many`."""
+    return one if n == 1 else many
+noinv_line = f"{n_noinv} enrolled {plural(n_noinv, 'child has', 'children have')} no invoice number and no fee."
+if n_noinv_paid:
+    noinv_line += (f" {'That child' if n_noinv == 1 else f'{n_noinv_paid} of them'} {plural(n_noinv_paid, 'has', 'have')}"
+                   " a payment note on the roster, so money may have arrived with nothing to match it to.")
+def rules_disagree(r):
+    """Decide whether the rule-based expected total differs from what the roster invoiced by 0.02 or more."""
+    exp_rule = round(r.r_fees - r.discount + (25.0 if r.reg_flag == "Y" else 0) + (25.0 if r.sup_flag == "Y" else 0), 2)
+    roster_tot = round(r.r_fees + r.r_sup + r.r_reg - r.r_disc, 2)
+    return abs(exp_rule - roster_tot) >= 0.02
+# counted once for the README, reused to fill the same rows red on Children
+mismatched = {i for i, r in ch.iterrows() if r.status == "Enrolled" and rules_disagree(r)}
 lines = [
  ("Fee ledger  -  how it works", TITLE),
  ("Built from the pupil roster and the bank export. Health, guardian-contact and free-text pupil columns were deliberately not carried over.", BLACK),
@@ -206,14 +260,14 @@ lines = [
  ("", BLACK),
  ("Assumptions  -  confirm these with the office", BOLD),
  ("Rates come from the January price list: £195 / £345 / £460 / £571 per 10 sessions for 1-4 siblings on Saturdays, £160 per child for Wednesdays, £25 registration, £25 supplies.", BLACK),
- ("Sessions per term are inferred from the amounts invoiced, not from a timetable: 21 Saturdays this term, 11 last term, 20 Wednesdays. Sibling pricing is treated as a family rate split evenly between the children.", BLACK),
- ("The autumn invoice register was never supplied, so autumn receipts can be tied to a family but not to an invoice.", BLACK),
+ (f"Sessions per term are inferred from the amounts invoiced, not from a timetable: {CUR['sat']} Saturdays this term, {PRIOR['sat']} last term, {CUR['wed']} Wednesdays. Sibling pricing is treated as a family rate split evenly between the children.", BLACK),
+ (f"The {TERM_PRIOR} invoice register was never supplied, so {TERM_PRIOR} receipts can be tied to a family but not to an invoice." if PRIOR["loaded"] != "Yes" else f"The {TERM_PRIOR} invoice register is loaded, so prior-term receipts can be reconciled against an invoice.", BLACK),
  ("", BLACK),
  ("What the roster got wrong", BOLD),
  (f"Invoice numbers shared by unrelated families: {', '.join(shared_inv)}  -  so the invoice number cannot be the family key, hence FAM-nnn.", BLACK),
- (f"{n_noinv} enrolled children have no invoice number and no fee. Two of them have payment notes, so money may have arrived with nothing to match it to.", BLACK),
+ (noinv_line, BLACK),
  (f"{n_disc} discounts were stored as negative numbers in the supplies column; they are a proper Discount column here. Invoice numbers out of sequence: {', '.join(n_out_of_seq)}.", BLACK),
- ("One invoice charges £18 supplies instead of £25  -  the only invoice the fee rules cannot reproduce.", BLACK),
+ (f"{len(mismatched)} {plural(len(mismatched), 'invoice', 'invoices')} whose add-ons or discount the fee rules cannot reproduce. The Check column on Children also recomputes tuition from sessions and sibling count, so it can flag rows this count does not.", BLACK),
  ("", BLACK),
  ("To re-run", BOLD),
  ("Replace the bank export, run build_ledger.py then reconcile.py. Copy column F of Receipts and the alias column of Families first  -  manual decisions live in the workbook, not in the scripts.", BLACK),
@@ -224,7 +278,7 @@ ws.column_dimensions["A"].width = 150
 
 # ---- Rates
 ws = wb.create_sheet("Rates")
-put(ws, 1, 1, "Fee rules  -  inputs (blue). Source: charity price list, January 2026 (photo supplied by user).", TITLE)
+put(ws, 1, 1, "Fee rules  -  inputs (blue). Source: school price list, January 2026.", TITLE)
 header(ws, 3, ["Item", "Basis", "£ per session / per item", "Source / note"])
 rates = [
  (4, "Saturday school  -  1 child", "per family per session", 19.50, "£195 per 10 sessions"),
@@ -245,13 +299,10 @@ widths(ws, [34, 40, 22, 70]); ws.freeze_panes = "A4"
 ws = wb.create_sheet("Terms")
 put(ws, 1, 1, "Invoicing terms  -  inputs (blue). Add a row per new term; the register for each term goes in Invoices.", TITLE)
 header(ws, 3, ["Term ID", "Description", "Saturday sessions", "Wednesday sessions", "Invoice series", "Register loaded?", "Receipts window from", "Receipts window to", "Note"])
-import datetime as _dt
-terms = [
- (4, TERM_PRIOR, "Autumn 2025 (Sep-Dec)", 11, 11, "2025-5xx / 2025-6xx", "No", _dt.date(2025, 8, 1), _dt.date(2025, 12, 14),
-  "Sessions inferred from receipts (£214.50 = 11 × £19.50). Invoice register not supplied  -  add it to allocate autumn receipts."),
- (5, TERM_CUR, "Term starting January 2026", 21, 20, "2026-xxx", "Yes", _dt.date(2025, 12, 15), _dt.date(2026, 8, 31),
-  "21 = £409.50 ÷ £19.50. Wednesday 20 = £320 ÷ £16 (single club invoice). Confirm both with the office."),
-]
+# Row 4 is the prior term and row 5 the current one. The Children sheet's session lookup and
+# reconcile.py's ageing formula both address those two rows, so the order is load-bearing.
+terms = [(4 + i, t["id"], t["desc"], t["sat"], t["wed"], t["series"], t["loaded"], t["start"], t["end"], t["note"])
+         for i, t in enumerate((PRIOR, CUR))]
 for row, *vals in terms:
     for j, v in enumerate(vals, 1):
         put(ws, row, j, v, BLUE if j in (3, 4, 5, 6, 7, 8) else BLACK, "dd/mm/yyyy" if j in (7, 8) else None)
@@ -260,7 +311,7 @@ widths(ws, [12, 28, 12, 12, 20, 12, 14, 14, 90]); ws.freeze_panes = "A4"
 # ---- Families
 ws = wb.create_sheet("Families")
 put(ws, 1, 1, "Families  -  stable key. One family can have several invoice numbers over time; the family ID never changes.", TITLE)
-header(ws, 3, ["Family ID", "Family surname(s)", "Children on roster", "Children billed (JAN-2026)", "Invoice no(s) JAN-2026", "Bank payer alias (fill in; separate with ;)", "Payer names seen with a verified reference (engine)", "Note"])
+header(ws, 3, ["Family ID", "Family surname(s)", "Children on roster", f"Children billed ({TERM_CUR})", f"Invoice no(s) {TERM_CUR}", "Bank payer alias (fill in; separate with ;)", "Payer names seen with a verified reference (engine)", "Note"])
 for i, r in fam.iterrows():
     row = 4 + i
     put(ws, row, 1, r.fid, BLUE); put(ws, row, 2, r["name"], BLUE)
@@ -297,11 +348,8 @@ for i, r in ch.iterrows():
     put(ws, row, 21, f'=IF(ABS($T{row})<0.02,"OK","CHECK")')
     note = " | ".join(x for x in [r.override_note, r.note, ("roster PAID: " + r.paid) if r.paid else ""] if x)
     put(ws, row, 22, note, BLUE)
-    if r.status == "Enrolled":
-        exp_rule = round(r.r_fees - r.discount + (25.0 if r.reg_flag == "Y" else 0) + (25.0 if r.sup_flag == "Y" else 0), 2)
-        roster_tot = round(r.r_fees + r.r_sup + r.r_reg - r.r_disc, 2)
-        if abs(exp_rule - roster_tot) >= 0.02:
-            for c in range(1, 23): ws.cell(row, c).fill = PatternFill("solid", fgColor="FCE4E4")
+    if i in mismatched:
+        for c in range(1, 23): ws.cell(row, c).fill = PatternFill("solid", fgColor="FCE4E4")
 widths(ws, [9, 10, 20, 14, 10, 13, 10, 12, 8, 9, 8, 10, 10, 9, 14, 8, 9, 11, 11, 10, 8, 55])
 ws.freeze_panes = "E4"; ws.auto_filter.ref = f"A3:V{last}"
 ws["J3"].comment = Comment("Leave blank for a standard term. Enter sessions only when the child is billed for a different number, e.g. 9 sessions, or 10.5 for half a sibling share.", "ledger")

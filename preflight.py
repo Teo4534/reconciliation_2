@@ -14,6 +14,13 @@ from pathlib import Path
 
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from terms import TERM_IDS, default_term   # noqa: E402  - the one place a term is defined
+
+# The term a roster is checked against: the same one build_ledger.py would build by default.
+DEFAULT_TERM = default_term()
+YEAR = DEFAULT_TERM[-4:]
+
 # build_ledger.py:29-57. The roster is read by name; every one of these must be present.
 ROSTER_REQUIRED = {
     "Statut:": 'enrolment status. Rows counted as enrolled are exactly those equal to "Inscrit".',
@@ -80,15 +87,16 @@ def check_roster(path):
 
     if "INVOICE NUMBER" in df.columns:
         refs = df["INVOICE NUMBER"].dropna().astype(str).str.strip()
-        matching = refs.str.match(r"^\s*2026\s*-?\s*\d{3}").sum()
+        matching = refs.str.match(rf"^\s*{YEAR}\s*-?\s*\d{{3}}").sum()
         if len(refs) and matching == 0:
             ok = False
-            line(BAD, "no invoice number matches the 2026-nnn pattern the engine looks for")
+            line(BAD, f"no invoice number matches the {YEAR}-nnn pattern the engine looks for")
             print(f"        found instead: {list(refs.head(3))}")
-            print("        engine.py builds its reference patterns from Config.term_cur;"
-                  " build_ledger.py:22 hard-codes JAN-2026 / AUT-2025.")
+            print(f"        both engine.py and build_ledger.py build their reference patterns"
+                  f" from the term, and this check assumed {DEFAULT_TERM}. If the roster is for"
+                  f" another term, add it to terms.py and pass --term.")
         elif len(refs):
-            line(OK, f"{matching}/{len(refs)} invoice numbers match the 2026-nnn pattern")
+            line(OK, f"{matching}/{len(refs)} invoice numbers match the {YEAR}-nnn pattern")
     return ok
 
 
@@ -164,8 +172,9 @@ def main(argv):
     else:
         line(BAD, "not ready. Fix the FAIL lines above - rename the roster columns to match,"
                   " and reorder the bank columns to date / amount / memo.")
-    print("\n        Whatever you do, note the term is hard-coded to JAN-2026 in six places in"
-          "\n        build_ledger.py (line 22, and the patterns and dates at 150-159, 190, 289-291).")
+    print(f"\n        Terms are defined in one place, the TERMS list in terms.py, which currently"
+          f"\n        holds: {', '.join(TERM_IDS)}. This check assumed {DEFAULT_TERM}."
+          f"\n        For another term, add an entry there and pass build_ledger.py --term <ID>.")
     return 0 if (r_ok and b_ok) else 1
 
 

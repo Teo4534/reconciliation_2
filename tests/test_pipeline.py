@@ -41,6 +41,9 @@ def pipeline(request, tmp_path_factory):
 
     wb = load_workbook(ledger, data_only=True)
     fam = {r[0]: str(r[1] or "") for r in wb["Families"].iter_rows(min_row=4, values_only=True) if r[0]}
+    # Family -> the invoice numbers it holds, so a test can check that a "shared" number really is.
+    fam_invoices = {r[0]: {p.strip() for p in re.split(r"[;,]", str(r[4] or "")) if p.strip()}
+                    for r in wb["Families"].iter_rows(min_row=4, values_only=True) if r[0]}
     rows = []
     for r in wb["Receipts"].iter_rows(min_row=4, values_only=True):
         if r[0] is None:
@@ -63,7 +66,7 @@ def pipeline(request, tmp_path_factory):
         bucket = truth[(g["date"], g["amount"], g["payer"])]
         assert bucket, f"receipt with no ground truth: {g}"
         pairs.append((g, bucket.pop(0)))
-    return dict(wb=wb, fam=fam, pairs=pairs, seed=request.param)
+    return dict(wb=wb, fam=fam, fam_invoices=fam_invoices, pairs=pairs, seed=request.param)
 
 
 def norm_family(s):
@@ -112,8 +115,24 @@ def test_conflicts_are_explained(pipeline):
 
 
 def test_an_invoice_number_shared_by_two_families_never_guesses(pipeline):
-    for g, t in pipeline["pairs"]:
-        if t["failure_mode"].startswith("shared_invoice") and g["tier"] in AUTO_TIERS:
+    """A reference that two families hold must never decide on its own.
+
+    This used to assert only 'if it was allocated, it was right', which passes when the case never
+    occurs. It did never occur: the generator's shared_invoice branch chose its family after
+    deriving the payer and the answer key from a different one, so the lines it produced were
+    wrong_ref cases wearing the wrong label. The first assertion is what keeps that from returning.
+    """
+    shared = [(g, t) for g, t in pipeline["pairs"] if t["failure_mode"].startswith("shared_invoice")]
+    assert shared, "no shared-invoice receipt in this dataset - the case is not being tested"
+
+    truth_invoices = {t["true_invoice"] for _, t in shared}
+    holders = {inv: [fid for fid, invs in pipeline["fam_invoices"].items() if inv in invs]
+               for inv in truth_invoices}
+    for inv, fids in holders.items():
+        assert len(fids) > 1, f"invoice {inv} is held by {fids}, so nothing is actually shared"
+
+    for g, t in shared:
+        if g["tier"] in AUTO_TIERS:
             assert correct(pipeline["fam"], g["fid"], t["true_family"]), f"guessed on a shared invoice number: {g}"
 
 
@@ -196,6 +215,44 @@ def test_no_money_disappears(pipeline):
     allocated = sum(g["amount"] for g, _ in pipeline["pairs"] if g["tier"] in AUTO_TIERS)
     queued = sum(g["amount"] for g, _ in pipeline["pairs"] if g["tier"] not in AUTO_TIERS)
     assert round(allocated + queued, 2) == round(total, 2)
+
+
+def test_a_different_term_needs_no_code_edit(tmp_path):
+    """The school's next term must be a --term argument, not a change to six places in the source.
+
+    build_ledger.py used to hard-code JAN-2026 and its date cut-offs, so running the tool for the
+    term starting in September meant editing the file. This builds the same roster twice, for two
+    different terms, and checks the workbook follows: the Terms sheet's current-term row, the
+    session count the Children sheet looks up, and the term stamped on every child.
+    """
+    run(ROOT / "generate_fake_data.py", tmp_path, "--seed", 20260101)
+    roster, bank = tmp_path / "roster.xlsx", tmp_path / "bank.xlsx"
+
+    default_led, other_led = tmp_path / "default.xlsx", tmp_path / "other.xlsx"
+    run(ROOT / "build_ledger.py", roster, bank, default_led)
+    run(ROOT / "build_ledger.py", roster, bank, other_led, "--term", "AUT-2026")
+
+    default_wb, other_wb = load_workbook(default_led), load_workbook(other_led)
+
+    # Row 5 of Terms is the current term: the Children session formula and reconcile.py's ageing
+    # formula both address it by row, so the two terms must land in the same place.
+    assert default_wb["Terms"].cell(5, 1).value == "JAN-2026"
+    assert other_wb["Terms"].cell(5, 1).value == "AUT-2026"
+    # Row 4 is the prior term, which shifts along with it.
+    assert default_wb["Terms"].cell(4, 1).value == "AUT-2025"
+    assert other_wb["Terms"].cell(4, 1).value == "JAN-2026"
+    # Sessions come from TERMS, not from a constant in the body of the script.
+    assert default_wb["Terms"].cell(5, 3).value == 21
+    assert other_wb["Terms"].cell(5, 3).value == 11
+    # Every child is stamped with the term being built, and the Families header follows it.
+    assert other_wb["Children"].cell(4, 7).value == "AUT-2026"
+    assert "AUT-2026" in other_wb["Families"].cell(3, 5).value
+
+    # An unknown term fails loudly rather than building a wrong workbook.
+    bad = subprocess.run([sys.executable, str(ROOT / "build_ledger.py"), str(roster), str(bank),
+                          str(tmp_path / "bad.xlsx"), "--term", "SPRING-1999"],
+                         cwd=ROOT, capture_output=True, text=True)
+    assert bad.returncode != 0 and "unknown term" in bad.stdout + bad.stderr
 
 
 def test_the_workbook_has_the_sheets_a_reviewer_needs(pipeline):
