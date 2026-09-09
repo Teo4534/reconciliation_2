@@ -81,13 +81,6 @@ for i, r in s.iterrows():
                      paid=paid, note=note))
 ch = pd.DataFrame(rows)
 
-# hand-resolved overrides where the roster amount implies a non-standard session count
-def set_override(mask, sessions, why):
-    ch.loc[mask, "sess_override"] = sessions
-    ch.loc[mask, "override_note"] = why
-set_override((ch.r_fees == 181.13), 10.5, "half of sibling share (£181.13)  -  joined mid-term? confirm")
-set_override((ch.r_fees == 546.0), 28, "£546 = 28 × £19.50  -  unexplained, confirm with office")
-
 # ---------------------------------------------------------------- families
 def same_family(a, b):
     a, b = norm(a), norm(b)
@@ -127,9 +120,18 @@ b.columns = names
 b = b.dropna(subset=["date", "amount"], how="all").reset_index(drop=True)
 CODE = re.compile(r"^(FT|BGC|BG|BBP|BP|B)$")
 rec = []
-# JAN-2026 invoice totals. Used only to notice a prior-term reference sitting on a payment whose
-# amount and date say current term. Deciding which family a receipt belongs to is engine.py's job.
-cur_amounts = {409.5, 362.25, 724.5, 322.0, 966.0, 434.5, 459.5, 749.5, 774.5, 387.25, 372.25}
+# JAN-2026 invoice totals, taken from the roster: each enrolled invoice's family total, half of it
+# (one sibling's share) and each enrolled child's own line. Used only to notice a prior-term
+# reference sitting on a payment whose amount and date say current term. Deciding which family a
+# receipt belongs to is engine.py's job.
+enr = ch[ch.status == "Enrolled"]
+child_tot = (enr.r_fees + enr.r_sup + enr.r_reg - enr.r_disc).round(2)
+# grouped by family as well as invoice: an invoice number shared by two families is two invoices
+inv_tot = child_tot.groupby([enr.fid, enr.inv]).sum().drop("", level=1, errors="ignore")
+cur_amounts = {float(x) for x in (*inv_tot, *(inv_tot / 2), *child_tot)}
+def is_cur_amount(amount, amounts):
+    """Decide whether a receipt amount equals one of the roster figures to the penny; a half-share's odd half-penny may have been rounded either way."""
+    return any(abs(amount - a) < 0.006 for a in amounts)
 for _, r in b.iterrows():
     memo = str(r.memo)
     payer = memo[:23].strip()
@@ -149,7 +151,7 @@ for _, r in b.iterrows():
     flags = []
     if r.amount < 0: flags.append("outflow / refund")
     if len(memo) >= 44: flags.append("bank truncated the reference field")
-    if prior_ref and r.date >= pd.Timestamp("2026-01-01") and round(float(r.amount), 2) in cur_amounts:
+    if prior_ref and r.date >= pd.Timestamp("2026-01-01") and is_cur_amount(float(r.amount), cur_amounts):
         flags.append("prior-term ref but 2026-term amount and date  -  parent may have reused old reference")
     extra = " | ".join(str(x).strip() for x in [r.note, r.extra] if pd.notna(x))
     rec.append(dict(date=r.date.date(), amount=float(r.amount), payer=payer, ref=ref, memo=memo,
@@ -184,6 +186,21 @@ ws = wb.active; ws.title = "README"
 shared_inv = sorted({k for k, v in groups.items() if k != "NOINV" and len(v) > 1})
 n_noinv = int((ch.inv == "").sum()); n_disc = int((ch.discount > 0).sum())
 n_out_of_seq = sorted({i for i in ch.inv if i and int(i.split("-")[1]) > 200})
+n_noinv_paid = int(((ch.inv == "") & (ch.paid != "")).sum())
+def plural(n, one, many):
+    """Decide the word form that agrees with a count: `one` when n == 1, else `many`."""
+    return one if n == 1 else many
+noinv_line = f"{n_noinv} enrolled {plural(n_noinv, 'child has', 'children have')} no invoice number and no fee."
+if n_noinv_paid:
+    noinv_line += (f" {'That child' if n_noinv == 1 else f'{n_noinv_paid} of them'} {plural(n_noinv_paid, 'has', 'have')}"
+                   " a payment note on the roster, so money may have arrived with nothing to match it to.")
+def rules_disagree(r):
+    """Decide whether the rule-based expected total differs from what the roster invoiced by 0.02 or more."""
+    exp_rule = round(r.r_fees - r.discount + (25.0 if r.reg_flag == "Y" else 0) + (25.0 if r.sup_flag == "Y" else 0), 2)
+    roster_tot = round(r.r_fees + r.r_sup + r.r_reg - r.r_disc, 2)
+    return abs(exp_rule - roster_tot) >= 0.02
+# counted once for the README, reused to fill the same rows red on Children
+mismatched = {i for i, r in ch.iterrows() if r.status == "Enrolled" and rules_disagree(r)}
 lines = [
  ("Fee ledger  -  how it works", TITLE),
  ("Built from the pupil roster and the bank export. Health, guardian-contact and free-text pupil columns were deliberately not carried over.", BLACK),
@@ -211,9 +228,9 @@ lines = [
  ("", BLACK),
  ("What the roster got wrong", BOLD),
  (f"Invoice numbers shared by unrelated families: {', '.join(shared_inv)}  -  so the invoice number cannot be the family key, hence FAM-nnn.", BLACK),
- (f"{n_noinv} enrolled children have no invoice number and no fee. Two of them have payment notes, so money may have arrived with nothing to match it to.", BLACK),
+ (noinv_line, BLACK),
  (f"{n_disc} discounts were stored as negative numbers in the supplies column; they are a proper Discount column here. Invoice numbers out of sequence: {', '.join(n_out_of_seq)}.", BLACK),
- ("One invoice charges £18 supplies instead of £25  -  the only invoice the fee rules cannot reproduce.", BLACK),
+ (f"{len(mismatched)} {plural(len(mismatched), 'invoice', 'invoices')} whose add-ons or discount the fee rules cannot reproduce. The Check column on Children also recomputes tuition from sessions and sibling count, so it can flag rows this count does not.", BLACK),
  ("", BLACK),
  ("To re-run", BOLD),
  ("Replace the bank export, run build_ledger.py then reconcile.py. Copy column F of Receipts and the alias column of Families first  -  manual decisions live in the workbook, not in the scripts.", BLACK),
@@ -224,7 +241,7 @@ ws.column_dimensions["A"].width = 150
 
 # ---- Rates
 ws = wb.create_sheet("Rates")
-put(ws, 1, 1, "Fee rules  -  inputs (blue). Source: charity price list, January 2026 (photo supplied by user).", TITLE)
+put(ws, 1, 1, "Fee rules  -  inputs (blue). Source: school price list, January 2026.", TITLE)
 header(ws, 3, ["Item", "Basis", "£ per session / per item", "Source / note"])
 rates = [
  (4, "Saturday school  -  1 child", "per family per session", 19.50, "£195 per 10 sessions"),
@@ -297,11 +314,8 @@ for i, r in ch.iterrows():
     put(ws, row, 21, f'=IF(ABS($T{row})<0.02,"OK","CHECK")')
     note = " | ".join(x for x in [r.override_note, r.note, ("roster PAID: " + r.paid) if r.paid else ""] if x)
     put(ws, row, 22, note, BLUE)
-    if r.status == "Enrolled":
-        exp_rule = round(r.r_fees - r.discount + (25.0 if r.reg_flag == "Y" else 0) + (25.0 if r.sup_flag == "Y" else 0), 2)
-        roster_tot = round(r.r_fees + r.r_sup + r.r_reg - r.r_disc, 2)
-        if abs(exp_rule - roster_tot) >= 0.02:
-            for c in range(1, 23): ws.cell(row, c).fill = PatternFill("solid", fgColor="FCE4E4")
+    if i in mismatched:
+        for c in range(1, 23): ws.cell(row, c).fill = PatternFill("solid", fgColor="FCE4E4")
 widths(ws, [9, 10, 20, 14, 10, 13, 10, 12, 8, 9, 8, 10, 10, 9, 14, 8, 9, 11, 11, 10, 8, 55])
 ws.freeze_panes = "E4"; ws.auto_filter.ref = f"A3:V{last}"
 ws["J3"].comment = Comment("Leave blank for a standard term. Enter sessions only when the child is billed for a different number, e.g. 9 sessions, or 10.5 for half a sibling share.", "ledger")

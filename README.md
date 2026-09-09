@@ -353,18 +353,15 @@ examples/               generated data and the resulting ledger
 
 ## How changes are made
 
-Development runs as a loop with a hard gate in the middle. `check.sh` is the gate: it fails if any
-test breaks or if a single receipt is credited to the wrong family. Around it sit two Claude Code
-subagents defined in `.claude/agents/`:
-
-- **implementer** makes one change in `engine.py`, adds a unit test that fails without it, and runs
-  the gate before reporting.
-- **reviewer** reads only the diff and the gate output, never the implementer's reasoning, and tries
-  to construct an input that misallocates. It cannot edit code.
-
-The orchestrating session dispatches the task, relays the reviewer's findings back to the
-implementer, and stops on APPROVE or after three rounds. The separation is deliberate: a model
-reviewing its own change tends to find the flaws it already knows about; a reviewer that starts
-from the diff finds the others. `CLAUDE.md` holds the rules both agents work to; `docs/AGENT_WORKFLOW.md` explains the setup in full.
+`check.sh` is the gate: it runs the unit tests, then the whole pipeline end to end on three
+generated seeds, then the score, and it fails unless `WRONG` is 0. Claude Code was used both to
+write changes and to review them, as two agents (separate sessions with their own instructions)
+defined in `.claude/agents/`. The first session makes one change in `engine.py` and adds a unit test
+that fails without it. The second session sees only the diff and the gate output, never the first
+session's reasoning, and its job is to construct an input that credits a receipt to the wrong
+family. If it finds one, the change goes back to the first session, and no change is committed until
+the gate is green. The gate matters more than the agents: a change that lifts coverage by allocating
+receipts wrongly cannot pass it, whoever wrote it. The setup is described in
+[docs/AGENT_WORKFLOW.md](docs/AGENT_WORKFLOW.md).
 
 MIT licensed.
