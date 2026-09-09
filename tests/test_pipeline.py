@@ -198,6 +198,44 @@ def test_no_money_disappears(pipeline):
     assert round(allocated + queued, 2) == round(total, 2)
 
 
+def test_a_different_term_needs_no_code_edit(tmp_path):
+    """The school's next term must be a --term argument, not a change to six places in the source.
+
+    build_ledger.py used to hard-code JAN-2026 and its date cut-offs, so running the tool for the
+    term starting in September meant editing the file. This builds the same roster twice, for two
+    different terms, and checks the workbook follows: the Terms sheet's current-term row, the
+    session count the Children sheet looks up, and the term stamped on every child.
+    """
+    run(ROOT / "generate_fake_data.py", tmp_path, "--seed", 20260101)
+    roster, bank = tmp_path / "roster.xlsx", tmp_path / "bank.xlsx"
+
+    default_led, other_led = tmp_path / "default.xlsx", tmp_path / "other.xlsx"
+    run(ROOT / "build_ledger.py", roster, bank, default_led)
+    run(ROOT / "build_ledger.py", roster, bank, other_led, "--term", "AUT-2026")
+
+    default_wb, other_wb = load_workbook(default_led), load_workbook(other_led)
+
+    # Row 5 of Terms is the current term: the Children session formula and reconcile.py's ageing
+    # formula both address it by row, so the two terms must land in the same place.
+    assert default_wb["Terms"].cell(5, 1).value == "JAN-2026"
+    assert other_wb["Terms"].cell(5, 1).value == "AUT-2026"
+    # Row 4 is the prior term, which shifts along with it.
+    assert default_wb["Terms"].cell(4, 1).value == "AUT-2025"
+    assert other_wb["Terms"].cell(4, 1).value == "JAN-2026"
+    # Sessions come from TERMS, not from a constant in the body of the script.
+    assert default_wb["Terms"].cell(5, 3).value == 21
+    assert other_wb["Terms"].cell(5, 3).value == 11
+    # Every child is stamped with the term being built, and the Families header follows it.
+    assert other_wb["Children"].cell(4, 7).value == "AUT-2026"
+    assert "AUT-2026" in other_wb["Families"].cell(3, 5).value
+
+    # An unknown term fails loudly rather than building a wrong workbook.
+    bad = subprocess.run([sys.executable, str(ROOT / "build_ledger.py"), str(roster), str(bank),
+                          str(tmp_path / "bad.xlsx"), "--term", "SPRING-1999"],
+                         cwd=ROOT, capture_output=True, text=True)
+    assert bad.returncode != 0 and "unknown term" in bad.stdout + bad.stderr
+
+
 def test_the_workbook_has_the_sheets_a_reviewer_needs(pipeline):
     for sheet in ("Summary", "README", "Rates", "Terms", "Families", "Children", "Receipts", "Review", "Position"):
         assert sheet in pipeline["wb"].sheetnames
