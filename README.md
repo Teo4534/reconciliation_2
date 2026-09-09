@@ -1,5 +1,7 @@
 # Fee reconciliation
 
+[![check](https://github.com/Teo4534/reconciliation_2/actions/workflows/check.yml/badge.svg)](https://github.com/Teo4534/reconciliation_2/actions/workflows/check.yml)
+
 Reconciliation exists so that no family is chased for money they have paid, and no unpaid balance goes unnoticed until year end. The bank memo is the only link between a payment and an invoice, and most of the time that link is broken: parents mistype the reference, reuse last term's, run it together with their name, or send nothing but a surname. Families with several children pay one combined invoice, often in instalments, sometimes from an account in a different name. At a small roll one person can fix the exceptions by hand. As the school grows the exceptions become the bulk of the work, and a VLOOKUP needs a clean key, which the reference never is.
 
 The result is that nobody can answer "who still owes us money?" without a day of manual work, so
@@ -114,7 +116,14 @@ python3 generate_fake_data.py examples --seed 20260101   # roster + bank + answe
 python3 build_ledger.py examples/roster.xlsx examples/bank.xlsx examples/fee_ledger.xlsx
 python3 reconcile.py examples/fee_ledger.xlsx            # allocate; write Position / Review / Summary
 python3 score.py                                         # accuracy against the answer key
-./check.sh                                               # all of the above, gated
+./check.sh                                               # the gate: tests, three seeds, WRONG must be 0
+```
+
+`check.sh` generates its own data in a temp directory, so it never modifies `examples/`. To build a
+different term, name it: terms are entries in `terms.py`, not values in the code.
+
+```bash
+python3 build_ledger.py roster.xlsx bank.xlsx ledger.xlsx --term AUT-2026
 ```
 
 Step by step:
@@ -344,6 +353,36 @@ invoice numbers hang off it.
 live in `Rates` and `Terms`. Running the rules against the invoices as a check found a pupil billed
 £18 for supplies instead of £25, an error nobody had spotted.
 
+## Decisions
+
+The calls below are mine. Most of the code was written with an AI assistant; these are the things
+it was told to do and the reasons, and they are the parts worth arguing with.
+
+- **Precision over coverage.** Sending a line to a human costs a minute. Crediting the wrong family
+  produces an arrears letter to a parent who has paid, and a family who owes money marked as
+  settled. So the build fails on one misallocation and does not fail on a low match rate.
+- **The invoice number cannot be the family key.** The real roster had two unrelated families
+  issued the same number, and numbers are reissued every term, so keying on them loses a family's
+  history and merges two families that are not one. Families get a `FAM-nnn` key that never changes
+  and invoice numbers hang off it.
+- **Refuse when the reference and the payer name disagree.** This is the one case where following
+  the obvious evidence is worse than doing nothing, because it goes wrong in two directions at
+  once. It gets its own tier, `X`, and its own reason string.
+- **Fee rules live in the workbook, not in the code.** Sibling tiers and session counts are cells
+  on `Rates` and `Terms`, so a price change is an edit the office can make. Running those rules
+  against the invoices found a pupil billed £18 for supplies instead of £25.
+- **Terms are data too.** The term used to be hard-coded in six places, so next term meant editing
+  the source. It is now one entry in `terms.py` and a `--term` argument.
+- **Every decision carries a reason string, and the strings are templates.** The same input always
+  produces the same wording, so the Review sheet can be audited and diffed rather than read.
+- **A model may suggest; only a person allocates.** Tried locally, on this laptop, with no data
+  leaving it: a small model given the eight receipts the engine had refused answered four right,
+  two wrong and abstained twice, and reported full confidence on both wrong answers. Useful as a
+  suggestion to a person, unacceptable as an allocation. It is not wired into the pipeline.
+- **Measured against an answer key, and against the dumbest thing that could work.** A percentage
+  with nothing beside it says very little, so `score.py` prints a naive surname-only baseline next
+  to the engine, and the gap is what the tier ladder is actually buying.
+
 ## Future work
 
 - First name matching only works while a first name is unique on the roster; a second child with
@@ -361,12 +400,14 @@ live in `Rates` and `Terms`. Running the rules against the invoices as a check f
 engine.py               allocation logic: pure functions, writes no Excel, unit-testable in milliseconds
 reconcile.py            loads the ledger, calls the engine, writes Position / Review / Summary
 build_ledger.py         roster + bank  ->  structured workbook
+terms.py                the school's terms as data: sessions, invoice series, receipt windows
 generate_fake_data.py   fictional roster + bank export + ground truth
 score.py                accuracy against ground truth, by failure mode, against a naive baseline
 preflight.py            checks a real roster and bank export before you run the pipeline
-check.sh                the harness: unit tests, end-to-end on three seeds, WRONG must be 0
+check.sh                the gate: unit tests, end-to-end on three seeds, WRONG must be 0
+.github/workflows/      runs check.sh on every push and pull request
 tests/test_engine.py    21 unit tests on the matching rules (no workbook needed)
-tests/test_pipeline.py  end-to-end tests over 3 generated datasets
+tests/test_pipeline.py  end-to-end tests over 3 generated datasets, and a second term
 examples/               generated data and the resulting ledger
 ```
 
