@@ -9,8 +9,9 @@ This repository builds a fee ledger from the roster and the bank export, then al
 receipt to a family on ranked evidence, allocating what it can prove and queuing the rest for a
 human with the reasoning written out.
 
-**On the sample data in `examples/`: 86% of receipts are allocated with no human involvement, and
-none is allocated to the wrong family.** The remaining 11 go to a review queue.
+**On the sample data in `examples/`: 90% of receipts are allocated with no human involvement, and
+none is allocated to the wrong family.** The remaining 8 go to a review queue. Across the three
+seeds the harness runs, the figure is 89&ndash;91%, and no receipt is misallocated on any of them.
 
 ![The Position sheet](examples/position_sheet.png)
 
@@ -80,7 +81,7 @@ The generator also plants specific problems on purpose, so that the checks have 
 - one child billed £18.00 for supplies instead of £25.00
 - one child with a &minus;£30.00 supplies line, which the ledger reads as a discount
 - one enrolled child with no invoice number and no fee
-- two unrelated families issued the same invoice number
+- two unrelated families issued the same invoice number, and receipts quoting it from both
 - roughly 30% of families paying in two instalments rather than one
 - one outgoing refund, to check that a negative amount is not treated as a receipt
 
@@ -146,16 +147,22 @@ assigned and the reason it recorded.
 
 | issue | bank memo | tier | reason |
 |---|---|---|---|
-| nothing | `MARGIT WENDELIN     2026-047` | A | invoice reference 2026-047 |
-| glued to the name | `GENEVIEVE MAALOUF   MAALOU2026-030` | A | invoice reference 2026-030 |
+| nothing | `BETTINA DELACROIX   2026-015` | A | invoice reference 2026-015 |
+| glued to the name | `INGRID ERIKSEN      ERIKSE2026-017` | A | invoice reference 2026-017 |
 | hyphen dropped | `VERA FALZON         2026018` | A | invoice reference 2026-018 |
 | only the number | `ELODIE HASANOVIC    060` | B | surname HASANOVIC |
-| cut off by the bank | `ULRICH CARDOSO      CARDOSO FRENCH SCHOOL` | B | surname CARDOSO |
-| no reference at all | `ULRICH QUILLIAM     school fees` | B | surname QUILLIAM |
+| cut off by the bank | `LUDOVIC ASHWORTH    ASHWORTH FRENCH SCHO` | B | surname ASHWORTH |
+| no reference at all | `TOVE YANKOVIC       Yankovic` | B | surname YANKOVIC |
 | a child's name only | `ZORA VANTERPOOL     Halima` | B | surname VANTERPOOL |
 | second instalment | `GENEVIEVE MAALOUF   2nd payment` | A | payer name previously seen with a verified reference for this family |
-| last term's reference | `MARGIT PELLETIER    2025-627` | D | several families fit: FAM-042 (surname PELLETIER); FAM-045 (surname PELLETIER) |
+| last term's reference | `KATRIN DUPLANTIER   2025-608` | B | surname DUPLANTIER (prior-term reference 2025-608 &mdash; family identified, invoice not loaded) |
+| a number two families hold | `MARGIT PELLETIER    2026-008` | A | invoice reference 2026-008 |
 | **someone else's reference** | `MARGIT RASMUSSEN    2026-039` | X | reference 2026-039 points to FAM-049 but the memo names FAM-048, parent may have typed the wrong invoice number |
+
+Two rows are worth pausing on. `2026-008` is an invoice number two unrelated families were issued,
+so the reference alone cannot decide; the surname in the memo picks between them and the line is
+allocated. Take the surname away and the same reference goes to review instead. The reason string
+records only the reference, which understates the evidence actually used, and is on the list to fix.
 
 The last row is the case that matters. A naive matcher follows the reference, credits the wrong
 family, one parent chased for money they paid and another incorrectly marked
@@ -224,19 +231,20 @@ One row per family, and the sheet a bursar actually works from. Real output, thr
 | FAM-001 | ABARCA | 1 | 2026-004 | £409.50 | £409.50 | £0.00 | settled | 1 |
 | FAM-003 | ACHTERBERG-MARCHETTI | 1 | 2026-001 | £434.50 | £434.50 | £0.00 | settled | 1 |
 | FAM-004 | ASHWORTH | 1 | 2026-005 | £434.50 | £434.50 | £0.00 | settled | 1 |
-| FAM-048 | RASMUSSEN | 1 | 2026-038 | £459.50 | £229.75 | £229.75 | part paid | 1 |
-| FAM-008 | BELHADJ | 2 | 2026-008, 2026-008a | £774.50 | £1,184.00 | &minus;£409.50 | **over paid** | 1 |
+| FAM-021 | DUPLANTIER | 1 | 2026-016 | £409.50 | £204.75 | £204.75 | part paid | 1 |
+| FAM-036 | KILBRIDE | 3 | 2026-027 | £1,041.00 | £520.50 | £520.50 | part paid | 1 |
+| FAM-045 | PELLETIER | 1 | 2026-008 | £409.50 | £614.25 | &minus;£204.75 | **over paid** | 2 |
 | FAM-002 | ACHTERBERG | 1 | 2026-052 | £434.50 | £0.00 | £434.50 | unpaid | 0 |
 | FAM-007 | BEAUCHAMP | 1 | 2026-007 | £434.50 | £0.00 | £434.50 | unpaid | 0 |
 | FAM-009 | BELHADJ-TREVELYAN | 1 | 2026-002 | £434.50 | £0.00 | £434.50 | unpaid | 0 |
 
-Across the whole sample: **51 families settled, 2 part paid, 7 still owing.**
+Across the whole sample: **44 families settled, 5 part paid, 1 over paid, 10 still owing.**
 
-FAM-008 is the interesting row. Its invoice number is shared with another family (`2026-008` and
-`2026-008a`), and it shows as over paid by exactly one sibling share, and a receipt belonging to
-the other family has landed here. This is the case the README opens with, caught by the arithmetic
-rather than by the matcher, which is why the Position sheet carries a balance column and not just a
-paid flag.
+FAM-045 is the interesting row. Nothing was misallocated to it: both of its receipts really are its
+own, and the generator simply had that family pay twice. The point is that no matching rule could
+have told anyone that. It surfaces because the sheet subtracts what came in from what the fee rules
+say was owed, which is why the Position sheet carries a balance column and not just a paid flag.
+The same column is what would catch a receipt landing on the wrong family, if one ever did.
 
 ![The Position sheet, filtered to families still owing](examples/position_sheet.png)
 
@@ -247,7 +255,7 @@ paid flag.
 ```
 failure mode        lines   auto  correct  WRONG  review
 clean                  17     17       17      0       0
-prior_term             14     12       12      0       2
+prior_term             14     14       14      0       0
 name_only              11      9        9      0       2
 glued                   9      9        9      0       0
 no_hyphen               7      7        7      0       0
@@ -255,13 +263,13 @@ truncated               6      4        4      0       2
 bare                    5      5        5      0       0
 first_name_only         4      4        4      0       0
 wrong_ref               4      1        1      0       3
-shared_invoice          2      1        1      0       1
+shared_invoice          2      2        2      0       0
 outflow                 1      0        0      0       1
-TOTAL                  80     69       69      0      11
+TOTAL                  80     72       72      0       8
 
-allocated automatically : 69/80 = 86%
-of those, correct       : 69/69 = 100.0%
-sent for human review   : 11
+allocated automatically : 72/80 = 90%
+of those, correct       : 72/72 = 100.0%
+sent for human review   : 8
 ```
 
 The design target is precision, not coverage. Sending more lines to a human is a cost; crediting
@@ -274,17 +282,23 @@ and prints it alongside:
 
 ```
                             allocated    correct
-naive surname-only          67/80        100.0%
-engine                      69/80        100.0%
-the ladder is worth         +2 receipt(s)
+naive surname-only          66/80        100.0%
+engine                      72/80        100.0%
+the ladder is worth         +6 receipt(s)
 ```
 
-That number is small, and it is a fact about the fixture rather than the engine. The generator
-builds every payer name as `{parent first name} {family surname}`, so the correct answer is written
-in plain text on all 79 fee lines and a surname lookup cannot help but find it. The tiers earn
-their place where the payer is *not* the family such as: a grandparent, a company account, a parent
-with a different surname, and the generator never produces one. Closing that gap is the
-single most useful change left, and it is why the baseline is printed rather than hidden.
+On the other two seeds the ladder is worth +11 and +5.
+
+That margin is still modest, and part of it is a fact about the fixture rather than the engine. The
+generator builds every payer name as `{parent first name} {family surname}`, so the correct answer
+is written in plain text on nearly every fee line and a surname lookup cannot help but find it. The
+tiers earn the rest: a reference the surname alone cannot resolve, a second instalment with no
+reference at all, and an invoice number two families hold. Where they would earn far more is when
+the payer is *not* the family, such as a grandparent, a company account, or a parent with a
+different surname, and the generator never produces one. On the school's real bank export, 23 of
+the allocated receipts were paid by someone whose name does not carry the family's surname, so this
+gap is the single most useful change left, and it is why the baseline is printed rather than
+hidden.
 
 ### What the sample data does not cover
 
@@ -298,7 +312,12 @@ Being explicit about this, because the numbers above are only as good as the fix
 - **Payment amounts sit exactly on the model**, full amount or exact half. Real transfers are
   rounded, combined across terms, or short by a few pounds.
 - **One term only.** AUT-2025 exists in `Terms` but its invoice register is not loaded, so
-  prior-term receipts can be identified by family and not reconciled against an invoice.
+  prior-term receipts can be identified by family and not reconciled against an invoice. On the
+  real data this is more than a detail: 132 of 248 receipts are autumn-term, and they stay
+  unreconciled until the office supplies that term's invoice numbers.
+- **A family can be sampled twice**, which is why one family shows as over paid above. Real double
+  payments happen, but here it is an accident of the generator rather than a case it sets out to
+  produce.
 
 ## The ledger
 

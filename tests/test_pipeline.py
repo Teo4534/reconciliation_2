@@ -41,6 +41,9 @@ def pipeline(request, tmp_path_factory):
 
     wb = load_workbook(ledger, data_only=True)
     fam = {r[0]: str(r[1] or "") for r in wb["Families"].iter_rows(min_row=4, values_only=True) if r[0]}
+    # Family -> the invoice numbers it holds, so a test can check that a "shared" number really is.
+    fam_invoices = {r[0]: {p.strip() for p in re.split(r"[;,]", str(r[4] or "")) if p.strip()}
+                    for r in wb["Families"].iter_rows(min_row=4, values_only=True) if r[0]}
     rows = []
     for r in wb["Receipts"].iter_rows(min_row=4, values_only=True):
         if r[0] is None:
@@ -63,7 +66,7 @@ def pipeline(request, tmp_path_factory):
         bucket = truth[(g["date"], g["amount"], g["payer"])]
         assert bucket, f"receipt with no ground truth: {g}"
         pairs.append((g, bucket.pop(0)))
-    return dict(wb=wb, fam=fam, pairs=pairs, seed=request.param)
+    return dict(wb=wb, fam=fam, fam_invoices=fam_invoices, pairs=pairs, seed=request.param)
 
 
 def norm_family(s):
@@ -112,8 +115,24 @@ def test_conflicts_are_explained(pipeline):
 
 
 def test_an_invoice_number_shared_by_two_families_never_guesses(pipeline):
-    for g, t in pipeline["pairs"]:
-        if t["failure_mode"].startswith("shared_invoice") and g["tier"] in AUTO_TIERS:
+    """A reference that two families hold must never decide on its own.
+
+    This used to assert only 'if it was allocated, it was right', which passes when the case never
+    occurs. It did never occur: the generator's shared_invoice branch chose its family after
+    deriving the payer and the answer key from a different one, so the lines it produced were
+    wrong_ref cases wearing the wrong label. The first assertion is what keeps that from returning.
+    """
+    shared = [(g, t) for g, t in pipeline["pairs"] if t["failure_mode"].startswith("shared_invoice")]
+    assert shared, "no shared-invoice receipt in this dataset - the case is not being tested"
+
+    truth_invoices = {t["true_invoice"] for _, t in shared}
+    holders = {inv: [fid for fid, invs in pipeline["fam_invoices"].items() if inv in invs]
+               for inv in truth_invoices}
+    for inv, fids in holders.items():
+        assert len(fids) > 1, f"invoice {inv} is held by {fids}, so nothing is actually shared"
+
+    for g, t in shared:
+        if g["tier"] in AUTO_TIERS:
             assert correct(pipeline["fam"], g["fid"], t["true_family"]), f"guessed on a shared invoice number: {g}"
 
 

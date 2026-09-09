@@ -2,7 +2,7 @@
 # The harness. One command, three gates. Agents and humans run exactly this.
 #   1. unit tests on the engine        (milliseconds - catches logic regressions)
 #   2. end-to-end on three seeds       (seconds     - catches integration breaks)
-#   3. precision on the example data   (must be 0 WRONG - the invariant this project exists for)
+#   3. precision on a freshly generated seed (must be 0 WRONG - the invariant this project exists for)
 set -euo pipefail
 cd "$(dirname "$0")"
 echo "== 1/3 unit =="; python3 -m pytest tests/test_engine.py -q
