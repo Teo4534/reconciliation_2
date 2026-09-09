@@ -1,6 +1,6 @@
 # Fee reconciliation
 
-[![check](https://github.com/Teo4534/reconciliation_2/actions/workflows/check.yml/badge.svg)](https://github.com/Teo4534/reconciliation_2/actions/workflows/check.yml)
+[![check](https://github.com/Teo4534/reconciliation_2/actions/workflows/main.yml/badge.svg)](https://github.com/Teo4534/reconciliation_2/actions/workflows/main.yml)
 
 Reconciliation exists so that no family is chased for money they have paid, and no unpaid balance goes unnoticed until year end. The bank memo is the only link between a payment and an invoice, and most of the time that link is broken: parents mistype the reference, reuse last term's, run it together with their name, or send nothing but a surname. Families with several children pay one combined invoice, often in instalments, sometimes from an account in a different name. At a small roll one person can fix the exceptions by hand. As the school grows the exceptions become the bulk of the work, and a VLOOKUP needs a clean key, which the reference never is.
 
@@ -13,7 +13,7 @@ human with the reasoning written out.
 
 **On the sample data in `examples/`: 90% of receipts are allocated with no human involvement, and
 none is allocated to the wrong family.** The remaining 8 go to a review queue. Across the three
-seeds the harness runs, the figure is 89&ndash;91%, and no receipt is misallocated on any of them.
+seeds the gate runs, the figure is 89 to 91%, and no receipt is misallocated on any of them.
 
 ![The Position sheet](examples/position_sheet.png)
 
@@ -164,7 +164,7 @@ assigned and the reason it recorded.
 | no reference at all | `TOVE YANKOVIC       Yankovic` | B | surname YANKOVIC |
 | a child's name only | `ZORA VANTERPOOL     Halima` | B | surname VANTERPOOL |
 | second instalment | `GENEVIEVE MAALOUF   2nd payment` | A | payer name previously seen with a verified reference for this family |
-| last term's reference | `KATRIN DUPLANTIER   2025-608` | B | surname DUPLANTIER (prior-term reference 2025-608 &mdash; family identified, invoice not loaded) |
+| last term's reference | `KATRIN DUPLANTIER   2025-608` | B | surname DUPLANTIER (prior-term reference 2025-608, family identified, invoice not loaded) |
 | a number two families hold | `MARGIT PELLETIER    2026-008` | A | invoice reference 2026-008 |
 | **someone else's reference** | `MARGIT RASMUSSEN    2026-039` | X | reference 2026-039 points to FAM-049 but the memo names FAM-048, parent may have typed the wrong invoice number |
 
