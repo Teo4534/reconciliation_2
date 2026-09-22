@@ -15,13 +15,14 @@ TERMS = [
     dict(id="AUT-2025", desc="Autumn 2025 (Sep-Dec)", sat=11, wed=11, series="2025-5xx / 2025-6xx",
          loaded="No", start=dt.date(2025, 8, 1), end=dt.date(2025, 12, 14),
          note="Sessions inferred from receipts (£214.50 = 11 × £19.50). Invoice register not supplied  -  add it to allocate autumn receipts."),
-    dict(id="JAN-2026", desc="Term starting January 2026", sat=21, wed=20, series="2026-xxx",
+    dict(id="JAN-2026", desc="Term starting January 2026", sat=21, wed=20, series="2026-0xx / 2026-1xx",
          loaded="Yes", start=dt.date(2025, 12, 15), end=dt.date(2026, 8, 31),
          note="21 = £409.50 ÷ £19.50. Wednesday 20 = £320 ÷ £16 (single club invoice). Confirm both with the office."),
     dict(id="AUT-2026", desc="Autumn 2026 (Sep-Dec)", sat=11, wed=11, series="2026-5xx / 2026-6xx",
-         loaded="No", start=dt.date(2026, 9, 1), end=dt.date(2026, 12, 14),
-         note="NOT YET CONFIRMED. Sessions copied from the previous autumn and the invoice series assumed to follow it. "
-              "Correct both on this sheet, or in terms.py, before running this term for real."),
+         loaded="No", start=dt.date(2026, 8, 1), end=dt.date(2026, 12, 31),
+         note="Saturdays confirmed from the autumn 2026 roster (£214.50 = 11 × £19.50; siblings £189.75 and £168.66). "
+              "Wednesday assumed equal. Series confirmed 5xx/6xx. Receipts start arriving in August. "
+              "'Register loaded' stays No so the default term remains the fixture; run this term with --term AUT-2026."),
 ]
 
 TERM_IDS = [t["id"] for t in TERMS]

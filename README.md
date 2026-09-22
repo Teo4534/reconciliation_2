@@ -21,6 +21,17 @@ No real data appears anywhere in this repository. `generate_fake_data.py` is a f
 roster and bank export that reproduce the failure patterns, which also means
 every line has a known correct answer, so accuracy can be measured rather than asserted.
 
+## The first real term
+
+Autumn 2026 ran on the school's real roster and Barclays export: 89 receipts, 75 allocated
+automatically, 14 to review, and three payments carrying a neighbour's invoice number held rather
+than credited. An independent audit disputed none of the 75. The loaders needed work (the real files
+did not look like the fixture); the engine did not. Most of that loader code was written with
+Claude; the invariant, the failure-mode design, the harness and the decisions are the work. The one
+bug the AI introduced, how the harness caught it, and a name leak caught by a person and not by any
+check, are in [docs/first-real-term.md](docs/first-real-term.md). The changelog is
+[docs/real-data.md](docs/real-data.md).
+
 ## How the school bills
 
 Everything downstream follows from the fee rules, so they come first. The school is a Saturday

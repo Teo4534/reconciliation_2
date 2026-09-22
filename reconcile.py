@@ -6,7 +6,7 @@ reconcile.py - allocate bank receipts to families and write the Review, Position
 The matching logic lives in engine.py and has no Excel in it; this file is the I/O around it.
 Re-run after any change to the Receipts sheet (new bank lines, new overrides). Safe to run repeatedly.
 """
-import sys
+import re, sys
 import datetime as dt
 from collections import Counter, defaultdict
 
@@ -133,7 +133,10 @@ def write_outputs(wb, rows, roster, cfg, report_date):
         put(wp, r, 5, f'=SUMIFS(Children!$R$4:$R$500,Children!$B$4:$B$500,$A{r},Children!$F$4:$F$500,"Enrolled",Children!$G$4:$G$500,"{TERM_CUR}")', fmt=GBP)
         put(wp, r, 6, f'=SUMIFS(Receipts!$B$4:$B$600,Receipts!$G$4:$G$600,$A{r},Receipts!$E$4:$E$600,"{TERM_CUR}")', fmt=GBP)
         put(wp, r, 7, f'=$E{r}-$F{r}', fmt=GBP)
-        put(wp, r, 8, f'=IF($E{r}=0,"no charge",IF($F{r}<=0,"unpaid",IF(ABS($G{r})<=0.5,"settled",IF($G{r}>0,"part paid","overpaid"))))')
+        # A family with nothing allocated but a receipt naming it in Review has probably paid. Say
+        # "in review", not "unpaid": the first is a job for the office, the second is a chase.
+        none_yet = '"in review"' if in_review[fid] else '"unpaid"'
+        put(wp, r, 8, f'=IF($E{r}=0,"no charge",IF($F{r}<=0,{none_yet},IF(ABS($G{r})<=0.5,"settled",IF($G{r}>0,"part paid","overpaid"))))')
         put(wp, r, 9, f'=COUNTIFS(Receipts!$G$4:$G$600,$A{r},Receipts!$E$4:$E$600,"{TERM_CUR}")', fmt="0")
         _dates = [y.date for y in recs[fid] if y.date]
         put(wp, r, 10, max(_dates) if _dates else "", GREEN, "dd/mm/yyyy")
@@ -183,12 +186,13 @@ def write_outputs(wb, rows, roster, cfg, report_date):
               ("Outstanding", '=SUMIF(Position!$G$5:$G$600,">0")', GBP),
               ("Families settled", '=COUNTIF(Position!$H$5:$H$600,"settled")', "0"), ("Families part paid", '=COUNTIF(Position!$H$5:$H$600,"part paid")', "0"),
               ("Families with nothing allocated", '=COUNTIF(Position!$H$5:$H$600,"unpaid")', "0"), ("Families overpaid", '=COUNTIF(Position!$H$5:$H$600,"overpaid")', "0"),
+              ("Families waiting on a Review decision", '=COUNTIF(Position!$H$5:$H$600,"in review")', "0"),
               ("Families flagged 'needs a look'", '=COUNTIF(Position!$M$5:$M$600,"?*")', "0"),
               ("", None, None), ("Rule check", None, None),
               ("Children billed", '=COUNTIF(Children!$F$4:$F$500,"Enrolled")', "0"),
               ("Invoices reproduced exactly by the fee rules", '=COUNTIFS(Children!$F$4:$F$500,"Enrolled",Children!$U$4:$U$500,"OK")', "0"),
               ("", None, None),
-              (f"Outstanding is overstated by whatever sits in Review and by any 2026 money tagged to {TERM_PRIOR}. The {TERM_PRIOR} register is not loaded, so autumn has no position yet.", None, None)]
+              (f"Outstanding is overstated by whatever sits in Review and by any {cfg.year_cur} money tagged to {TERM_PRIOR}. The {TERM_PRIOR} register is not loaded, so {TERM_PRIOR} has no position here.", None, None)]
     for i, (label, f, fmt) in enumerate(items, 3):
         put(wsum, i, 1, label, BOLD if f is None and label else BLACK)
         if f: put(wsum, i, 2, f, GREEN, fmt)
@@ -199,10 +203,33 @@ def write_outputs(wb, rows, roster, cfg, report_date):
     return queue, order
 
 
+def config_for(wb) -> Config:
+    """Read the term this ledger was built for off its own Terms sheet.
+
+    build_ledger.py writes the prior term on row 4 and the current one on row 5, with each term's
+    invoice series beside it. Taking them from the workbook means reconcile.py needs no flag and
+    cannot be pointed at a ledger built for a different term than the one it assumes.
+    """
+    ws = wb["Terms"]
+    prior, cur = ws.cell(4, 1).value, ws.cell(5, 1).value
+    if not cur or not prior:
+        return Config()
+    series = {which: Config.series_bounds(ws.cell(row, 5).value) for row, which in ((5, "cur"), (4, "prior"))}
+    # Only a term whose predecessor shares its year needs the series to tell references apart.
+    same_year = cur[-4:] == prior[-4:]
+    # Per-family rates for 1, 2 and 3 siblings come from the Rates sheet, the cell the office edits.
+    rates = [float(wb["Rates"].cell(r, 3).value or 0) for r in (4, 5, 6)]
+    bases = tuple((t, tuple(round(float(sat_n or 0) * r, 2) for r in rates))
+                  for t, sat_n in ((prior, ws.cell(4, 3).value), (cur, ws.cell(5, 3).value)))
+    return Config(term_cur=cur, term_prior=prior, fee_bases=bases,
+                  cur_series=series["cur"] if same_year else (),
+                  prior_series=series["prior"] if same_year else ())
+
+
 def main(argv):
     ledger = argv[1] if len(argv) > 1 else "examples/fee_ledger.xlsx"
-    cfg = Config()
     wb = load_workbook(ledger)
+    cfg = config_for(wb)
     roster = load_roster(wb, cfg)
     rows = allocate(read_receipts(wb["Receipts"], cfg), roster, cfg)
     queue, order = write_outputs(wb, rows, roster, cfg, dt.date.today())

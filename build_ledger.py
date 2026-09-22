@@ -20,6 +20,8 @@ from openpyxl.utils import get_column_letter
 from openpyxl.comments import Comment
 
 from terms import default_term, resolve
+from engine import Config as EngineConfig
+from sources import ROSTER_COLS, BANK_COLS, BANK_POSITIONAL, NOT_A_RECEIPT, INVOICE_BLANKS, NAME_NOISE, bank_header
 
 def parse_args(argv):
     """Split '<roster> <bank> <out> [--term ID]' into three paths and the chosen term entry.
@@ -50,16 +52,63 @@ ROSTER, BANK, OUT, PRIOR, CUR = parse_args(sys.argv[1:])
 TERM_CUR, TERM_PRIOR = CUR["id"], PRIOR["id"]
 YEAR_CUR, YEAR_PRIOR = TERM_CUR[-4:], TERM_PRIOR[-4:]
 
+# ================================================================ source files
+# Headings, filters and noise words live in sources.py, shared with preflight.py. A stray letter in
+# the invoice year is a typo for the same invoice.
+INVOICE_FIXES = ((re.compile(r"^(\d{4})[A-Za-z]+-"), r"\1-"),)
+# When a term and the one before it share a year, the invoice series in terms.py is what tells
+# their references apart: autumn 2026 issues 2026-5xx where January 2026 issued 2026-0xx. Read
+# from the same text the Terms sheet shows, so build_ledger.py and reconcile.py cannot disagree.
+SAME_YEAR = YEAR_CUR == YEAR_PRIOR
+CUR_SERIES = EngineConfig.series_bounds(CUR["series"]) if SAME_YEAR else ()
+PRIOR_SERIES = EngineConfig.series_bounds(PRIOR["series"]) if SAME_YEAR else ()
+
+def in_series(num, lo_hi):
+    """Is this three-digit part inside a term's invoice series? True when no series is set."""
+    return not lo_hi or lo_hi[0] <= int(num) <= lo_hi[1]
+
 def norm(x):
     return unicodedata.normalize("NFKD", str(x)).encode("ascii", "ignore").decode()
 
 # ---------------------------------------------------------------- roster
+def pick(df, field_):
+    """The actual column heading in `df` for a canonical field, or None if the file has not got it."""
+    for name in ROSTER_COLS[field_]:
+        if name in df.columns:
+            return name
+    return None
+
 s = pd.read_excel(ROSTER)
 s.columns = [str(c).strip() for c in s.columns]
-s = s[s["Statut:"] == "Inscrit"].copy().reset_index(drop=True)
-note_cols = [c for c in s.columns if c.startswith("Unnamed: 1")]
+C = {f: pick(s, f) for f in ROSTER_COLS}
+if not C["pupil"] or not C["invoice"]:
+    sys.exit(f"{ROSTER}: no pupil or invoice column. Headings found: {list(s.columns)[:12]}")
+# A spreadsheet carries its own furniture: a grand-total row at the foot, blank spacer rows, and
+# (in the real export) thousands of empty columns Excel invented. Keep only rows that name a pupil.
+s = s[s[C["pupil"]].notna() & (s[C["status"]].astype(str).str.strip() != "Total:")].copy()
+# Free-text notes sit in unlabelled columns whose position moves between exports. Take the ones
+# holding text; a stray unlabelled number is the total row's spill, not a note.
+note_cols = [c for c in s.columns if str(c).startswith("Unnamed")
+             and s[c].map(lambda v: isinstance(v, str) and v.strip() != "").any()]
+# Enrolment. "Inscrit" is explicit, but the real roster leaves the status blank on rows added after
+# the list was first drawn up - a sibling tacked onto an existing invoice, and the block of late
+# joiners at the foot. A blank status with an invoice number and a fee is an enrolled child: the
+# office invoiced them. Dropping those loses their payments, which is the failure this guards.
+status_raw = s[C["status"]].astype(str).str.strip() if C["status"] else pd.Series("", index=s.index)
+status_blank = (s[C["status"]].isna() | (status_raw == "")) if C["status"] else pd.Series(True, index=s.index)
+has_invoice = s[C["invoice"]].notna() if C["invoice"] else False
+has_fee = s[C["fees"]].notna() if C["fees"] else False
+s["_late_join"] = status_blank & has_invoice & has_fee
+s = s[(status_raw == "Inscrit") | s["_late_join"]].copy().reset_index(drop=True)
 
 def parse_name(raw):
+    """Split a roster cell into (SURNAME, first name).
+
+    The roster's own convention is the surname first in capitals. Rows added later are typed in
+    ordinary case as "Chloe Renard", first name first, and reading those the house way would make
+    CHLOE the surname and lose every payment that spells the family's name. So when no token is
+    capitalised, the last token is taken as the surname (with a lower-case particle before it).
+    """
     t = re.sub(r"\s*-\s*", "-", str(raw)).strip()
     t = t.split("(")[0]
     toks = t.split()
@@ -68,23 +117,48 @@ def parse_name(raw):
         if tok.isupper() and len(tok) > 1: sur.append(tok)
         else: break
     if not sur:
-        sur, toks = [toks[0]], toks
-        first = toks[1] if len(toks) > 1 else ""
+        clean = [tok for tok in toks if re.search(r"[A-Za-zÀ-ÿ]", tok) and tok.upper() not in NAME_NOISE]
+        if len(clean) >= 2:
+            # Title case throughout, so the roster's surname-first rule does not apply. The last
+            # token is the surname. A middle name must not join it: "Grace Bayo Chen" is CHEN, or
+            # BAYO becomes surname evidence for a child who is not a Bayo. A lower-case tail is a
+            # particle, so the token before it is pulled in: "Aisha Ndiaye diop" is NDIAYE DIOP.
+            cut = len(clean) - 1
+            while cut > 1 and clean[cut][:1].islower():
+                cut -= 1
+            sur, first = clean[cut:], clean[0]
+        else:
+            sur, first = ([toks[0]], toks[1] if len(toks) > 1 else "")
     else:
         rest = toks[len(sur):]
         first = rest[0] if rest else ""
     first = re.sub(r"[^A-Za-zÀ-ÿ'\-]", "", first)
+    sur = [t for t in sur if t.upper() not in NAME_NOISE] or sur
     return " ".join(sur).upper(), first
 
 rows = []
 for i, r in s.iterrows():
-    sur, first = parse_name(r["LES ELEVES"])
-    inv_raw = "" if pd.isna(r["INVOICE NUMBER"]) else str(r["INVOICE NUMBER"]).strip()
+    cell = lambda f: r[C[f]] if C[f] else None
+    sur, first = parse_name(cell("pupil"))
+    # Excel forces a text invoice number with a leading apostrophe ('2026-999); strip it, and the
+    # 'a' suffix the roster puts on a sibling's row, so siblings share one invoice key.
+    inv_raw = "" if pd.isna(cell("invoice")) else str(cell("invoice")).strip().lstrip("'")
+    if inv_raw.lower() in INVOICE_BLANKS:
+        inv_raw = ""
+    for pat, sub_ in INVOICE_FIXES:
+        inv_raw = pat.sub(sub_, inv_raw)
     inv = re.sub(r"[a.]$", "", inv_raw)
     note = " | ".join(str(r[c]).strip() for c in note_cols if pd.notna(r[c]))
-    paid = "" if pd.isna(r["PAID"]) else str(r["PAID"]).strip()
-    fees = r["FEES"]; sup = r["OFFICE SUPPLIES"]; reg = r["REG FEES ONE OFF"]
-    raw_lower = (str(r["LES ELEVES"]) + " " + note + " " + paid).lower()
+    if r["_late_join"]:
+        note = " | ".join(x for x in [note, "status blank on roster  -  taken as a late enrolment"] if x)
+    # The roster's convention is SURNAME first in capitals. Where a row does not follow it the
+    # surname is inferred, so say so: an inferred surname is what the bank memo is matched against.
+    inferred = not re.match(r"^\S*[A-ZÀ-Ý]{2,}\S*(\s|$)", str(cell("pupil")).strip())
+    if inferred:
+        note = " | ".join(x for x in [note, f"name not in SURNAME-first form  -  read as surname '{sur}'; confirm"] if x)
+    paid = "" if pd.isna(cell("paid")) else str(cell("paid")).strip()
+    fees = cell("fees"); sup = cell("supplies"); reg = cell("reg")
+    raw_lower = (str(cell("pupil")) + " " + note + " " + paid).lower()
     # status
     if pd.isna(fees) and ("not attending" in raw_lower or "not in school" in raw_lower):
         status = "Not attending"
@@ -107,8 +181,24 @@ for i, r in s.iterrows():
                      sup_flag="Y" if sup_pos > 0 else "N",
                      r_fees=0.0 if pd.isna(fees) else float(fees), r_sup=sup_pos,
                      r_reg=0.0 if pd.isna(reg) else float(reg), r_disc=discount,
-                     paid=paid, note=note))
+                     paid=paid, note=note, inferred=inferred, raw=str(cell("pupil"))))
 ch = pd.DataFrame(rows)
+
+# An inferred surname yields to the roster's own evidence. "Martin Lucas" on invoice 2026-999,
+# where MARTIN Ines and MARTIN Jules already sit, is a third Martin child, not a Lucas: a token
+# of the name equals the surname of a properly written row on the same invoice. That is two
+# independent facts agreeing, so the inferred reading is replaced and the family stays whole.
+known = ch[~ch.inferred & (ch.inv != "")].groupby("inv")["sur"].agg(set)
+for i in ch.index[ch.inferred & (ch.inv != "")]:
+    toks = {norm(t).upper() for t in re.split(r"[\s-]+", ch.at[i, "raw"])}
+    match = [s_ for s_ in known.get(ch.at[i, "inv"], set()) if norm(s_).upper() in toks]
+    if len(match) == 1 and match[0] != ch.at[i, "sur"]:
+        first_tok = next(t for t in ch.at[i, "raw"].split() if norm(t).upper() != norm(match[0]).upper())
+        ch.at[i, "note"] = ch.at[i, "note"].replace(f"read as surname '{ch.at[i, 'sur']}'; confirm",
+                                                    f"read as surname '{match[0]}', shared invoice with that family")
+        ch.at[i, "sur"], ch.at[i, "first"] = match[0], re.sub(r"[^A-Za-zÀ-ÿ'\-]", "", first_tok)
+n_late = int(ch.inferred.sum()) if len(ch) else 0
+ch = ch.drop(columns=["inferred", "raw"])
 
 # ---------------------------------------------------------------- families
 def same_family(a, b):
@@ -141,12 +231,40 @@ ch = ch.sort_values(["fid", "sur", "first"]).reset_index(drop=True)
 ch["cid"] = [f"CH-{i+1:03d}" for i in range(len(ch))]
 # ---------------------------------------------------------------- bank
 b = pd.read_excel(BANK, header=None)
-names = ["date", "amount", "memo", "cat", "note", "extra"]
-b = b.reindex(columns=range(len(names)))
-b.columns = names
+# The fixture has no header and a fixed column order. Barclays writes a header row and orders the
+# columns differently, so when a header is there the columns are taken by name and never by index.
+head = [str(x).strip() for x in b.iloc[0]] if len(b) else []
+if len(b) and bank_header(b.iloc[0]):
+    at = {f: next((head.index(n) for n in names_ if n in head), None) for f, names_ in BANK_COLS.items()}
+    missing = [f for f, i in at.items() if i is None and f != "cat"]
+    if missing:
+        sys.exit(f"{BANK}: bank export has no {', '.join(missing)} column. Headings found: {head}")
+    body = b.iloc[1:].reset_index(drop=True)
+    b = pd.DataFrame({f: (body[i] if i is not None else None) for f, i in at.items()})
+    b["note"] = None; b["extra"] = None
+else:
+    b = b.reindex(columns=range(len(BANK_POSITIONAL)))
+    b.columns = BANK_POSITIONAL
 # Real exports carry blank spacer rows. Without this a blank amount reaches the `r.amount < 0`
 # test below as NaT and raises "'<' not supported between instances of 'NaTType' and 'int'".
 b = b.dropna(subset=["date", "amount"], how="all").reset_index(drop=True)
+# A UK bank writes dd/mm/yyyy, and an export that has been through Excel can carry its amounts as
+# text ("1,234.50"). Neither may cost a receipt silently: a line with a memo but no readable date
+# or amount stops the build, so the office fixes the file rather than losing the money.
+b["date"] = pd.to_datetime(b["date"], errors="coerce", dayfirst=True)
+b["amount"] = pd.to_numeric(b["amount"].astype(str).str.replace(r"[£,\s]", "", regex=True), errors="coerce")
+unreadable = b[(b["date"].isna() | b["amount"].isna()) & b["memo"].notna()]
+if len(unreadable):
+    sys.exit(f"{BANK}: {len(unreadable)} line(s) with a memo but no readable date or amount, e.g. "
+             f"{unreadable.iloc[0].to_dict()}. Fix the export; nothing was written.")
+b = b[b["date"].notna() & b["amount"].notna()].reset_index(drop=True)
+# The real statement is the whole account, not just fee income: rent, utilities and card spending
+# share it with the receipts. Drop outgoing lines in the configured categories so the office is not
+# asked to review the electricity bill. Only negatives qualify, so no receipt can go missing here.
+cat_l = b["cat"].astype(str).str.strip().str.lower()
+not_fee = (b["amount"] < 0) & cat_l.isin(NOT_A_RECEIPT)
+n_not_fee = int(not_fee.sum())
+b = b[~not_fee].reset_index(drop=True)
 CODE = re.compile(r"^(FT|BGC|BG|BBP|BP|B)$")
 # Reference spellings, built from the chosen term's year rather than written out: 2026-047 and
 # 2026047 for the current term, 2025-6xx and the two-digit forms parents use for the prior one.
@@ -176,9 +294,12 @@ for _, r in b.iterrows():
     code = tail[-1] if tail and CODE.match(tail[-1]) else ""
     ref = " ".join(tail[:-1] if code else tail)
     M = norm(memo).upper()
-    m = CUR_REF_RE.search(M) or CUR_REF_SHORT_RE.search(M)
+    # A reference is this term's only if its year matches AND its number is inside this term's
+    # series; where no series is set the year decides on its own, as it always did.
+    m = next((mm for mm in CUR_REF_RE.finditer(M) if in_series(mm.group(1), CUR_SERIES)), None) \
+        or next((mm for mm in CUR_REF_SHORT_RE.finditer(M) if in_series(mm.group(1), CUR_SERIES)), None)
     cur_ref = f"{YEAR_CUR}-{m.group(1)}" if m else ""
-    pm = PRIOR_REF_RE.search(M)
+    pm = next((mm for mm in PRIOR_REF_RE.finditer(M) if not mm.group(1) or in_series(mm.group(1), PRIOR_SERIES)), None)
     prior_ref = pm.group(0) if (pm and not cur_ref) else ""
     # Which term a receipt belongs to is a property of the receipt, so it is settled here. Which
     # family it belongs to is a judgement on ranked evidence, and that lives in engine.py.
@@ -222,7 +343,13 @@ def put(ws, row, col, val, font=BLACK, fmt=None, fill=None):
 ws = wb.active; ws.title = "README"
 shared_inv = sorted({k for k, v in groups.items() if k != "NOINV" and len(v) > 1})
 n_noinv = int((ch.inv == "").sum()); n_disc = int((ch.discount > 0).sum())
-n_out_of_seq = sorted({i for i in ch.inv if i and int(i.split("-")[1]) > 200})
+def seq_num(inv):
+    """The three-digit part of an invoice number, or None if it is not spelled like one."""
+    m = re.match(r"^\d{4}-(\d{1,3})$", str(inv))
+    return int(m.group(1)) if m else None
+# Out of sequence means outside the series this term issues, which is a term fact, not a constant.
+lo, hi = CUR_SERIES or (0, 200)
+n_out_of_seq = sorted({i for i in ch.inv if i and (seq_num(i) is None or not lo <= seq_num(i) <= hi)})
 n_noinv_paid = int(((ch.inv == "") & (ch.paid != "")).sum())
 def plural(n, one, many):
     """Decide the word form that agrees with a count: `one` when n == 1, else `many`."""
@@ -374,5 +501,7 @@ ws.freeze_panes = "C4"; ws.auto_filter.ref = f"A3:O{3 + len(rc)}"
 
 wb.save(OUT)
 print("saved", OUT, "| children", len(ch), "| families", len(fam), "| receipts", len(rc))
-print("statuses", ch.status.value_counts().to_dict())
+print("statuses", ch.status.value_counts().to_dict(), "| rows not in SURNAME-first form", n_late)
+if n_not_fee:
+    print(f"dropped {n_not_fee} outgoing non-fee line(s): {', '.join(sorted(NOT_A_RECEIPT))}")
 print("shared invoices", shared_inv, "| no-invoice children", n_noinv, "| discounts", n_disc, "| out of seq", n_out_of_seq)
