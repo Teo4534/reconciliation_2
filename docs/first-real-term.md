@@ -51,6 +51,18 @@ Lesson two: a bug in code can be reproduced with three rows and a test. A bug in
 
 Most of the code in this change was written with Claude. The invariant, the failure-mode design, the harness, the two design decisions (adapt the repo rather than write throwaway glue; treat late joiners as enrolled) and the verification were the work. The AI's one real mistake was found because it was in code, by a review the code made possible.
 
+## The mistake that mattered
+
+The README says no real data appears in this repository. While writing this post and the changelog, I put real family surnames into the docs, into code comments, into one test, and into a commit message, and pushed the branch. They were public for about thirty minutes.
+
+The tooling did not catch it. The harness checks allocations, not prose. `.gitignore` blocks the spreadsheets, not a name typed into a Markdown file. What caught it was reading the branch on GitHub and asking why a child's surname was in a commit message.
+
+What followed: the branch was deleted from GitHub within minutes; every commit on it was rebuilt from scratch with the names replaced by fictional ones, in files and in messages; the full history was searched for every name before the branch went back up; GitHub Support was asked to purge the unreachable commits. `main` was never touched.
+
+Two rules came out of it. Nothing derived from a real file goes into any tracked file or commit message, ever: examples use invented names, always. And the person is the last gate, not the first; the tool that produced the leak was the same one that produced the fix, and neither happened without someone reading the output.
+
+Lesson three: the invariant covers the ledger. It did not cover the write-up. Now it does.
+
 ## What the office does next
 
 Work the 14 review lines. Rename `Moreau Lea Fontaine` to `MOREAU Lea Fontaine`. Add GARNIER to the roster; a payment of £220 arrived and there is no row to put it against. Re-run in two weeks with a fresh export; 40 families show unpaid three weeks into term, another 13 are marked "in review" because a payment naming them is waiting on a decision, and 8 only just joined, so that run is the one that says whether anyone actually left.
