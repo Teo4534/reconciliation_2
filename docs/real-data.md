@@ -10,8 +10,8 @@ Everything below is loading, configuration, or a data quirk the generated fixtur
 
 ### build_ledger.py
 
-- **Config block.** Column aliases, term settings and filters now sit in one place at the top. A new term is a `TermSpec` entry; a new heading is one string in `ROSTER_COLS` or `BANK_COLS`.
-- **`--term=ID`** picks the `TermSpec`. Default stays `JAN-2026`, so `check.sh` is unchanged.
+- **Config block.** Column aliases and filters sit in one place at the top. A new heading is one string in `ROSTER_COLS` or `BANK_COLS`. Terms stay in `terms.py`, one entry per term.
+- **`--term ID`** picks the term from `terms.py`. Default stays `JAN-2026`, so `check.sh` is unchanged.
 - **Roster columns read by alias.** The real roster says `INVOICE N`, `REG FEE`, `SUPPLIES`, `ONEOFF REG`; the fixture says `INVOICE NUMBER`, `FEES`, `OFFICE SUPPLIES`, `REG FEES ONE OFF`. Both load. `PAID` is optional.
 - **Note columns.** Previously any column starting `Unnamed: 1`. The real file has 16,359 empty columns Excel invented, so that rule grabbed thousands. Now: unlabelled columns that hold text.
 - **Blank status rows.** The real roster leaves `Statut:` blank on rows added after the list was first drawn up (25 children, including two families with payments in the bank file). A blank status with an invoice number and a fee is now enrolled, with a note on the Children sheet.
@@ -55,7 +55,7 @@ Five adversarial reviewers (one lens each) plus one skeptic per finding, after t
 
 ```
 pip install xlrd
-python build_ledger.py roster.xlsx bank.xls ledger.xlsx --term=AUT-2026
+python build_ledger.py roster.xlsx bank.xls ledger.xlsx --term AUT-2026
 python reconcile.py ledger.xlsx
 ```
 

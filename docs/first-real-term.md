@@ -19,7 +19,7 @@ Lesson one: the hard part of a matching system is rarely the matching. It is the
 
 All loading and configuration. `docs/real-data.md` has the detail.
 
-- A config block at the top of `build_ledger.py`: column aliases, a `TermSpec` per term, filters. A new term is one entry; a new heading is one string.
+- A config block at the top of `build_ledger.py`: column aliases and filters. A new heading is one string. Terms stay in `terms.py`, one entry per term.
 - Bank file read by heading when it has one. Outgoing non-fee lines dropped, negatives only, so no receipt can be lost.
 - Blank status with an invoice and a fee counts as enrolled, with a note for the office.
 - `Config` in `engine.py` gained optional invoice-series bounds so two terms in one year stay apart. Empty by default; every existing fixture behaves as before.
