@@ -94,6 +94,43 @@ def test_prior_term_reference_only_when_no_current_one():
     assert parse_refs("2025-627 2026-001", CFG) == ("2026-001", "")
 
 
+def test_a_series_separates_two_terms_in_the_same_year():
+    """Autumn 2026 issues 2026-5xx; the January 2026 term issued 2026-0xx. Same year, so the
+    number range is what tells a current reference from a prior one."""
+    cfg = Config(term_cur="AUT-2026", term_prior="JAN-2026", cur_series=(500, 699), prior_series=(1, 199))
+    assert parse_refs("2026-612", cfg) == ("2026-612", "")
+    assert parse_refs("HASANOVIC 2026-003", cfg) == ("", "2026-003")
+    assert parse_refs("2026-003 2026-612", cfg) == ("2026-612", "")
+    assert parse_refs("26612", cfg) == ("2026-612", "")            # two-digit year, still in series
+
+
+def test_series_bounds_read_the_human_form():
+    assert Config.series_bounds("2026-5xx / 2026-6xx") == (500, 699)
+    assert Config.series_bounds("2026-0xx / 2026-1xx") == (0, 199)
+    assert Config.series_bounds("2026-xxx") == () and Config.series_bounds(None) == ()
+
+
+def test_no_series_means_the_year_decides_as_before():
+    cfg = Config(term_cur="JAN-2026", term_prior="AUT-2025")
+    assert cfg.in_series("999", "cur") and cfg.in_series("000", "prior")
+    assert parse_refs("2026-999", cfg) == ("2026-999", "")
+
+
+def test_reconcile_reads_the_term_off_the_ledger():
+    """The Terms sheet says which term a ledger was built for; reconcile.py must not assume one."""
+    from openpyxl import Workbook
+    from reconcile import config_for
+    wb = Workbook(); ws = wb.active; ws.title = "Terms"
+    ws.cell(4, 1, "JAN-2026"); ws.cell(4, 3, 21); ws.cell(4, 5, "2026-0xx / 2026-1xx")
+    ws.cell(5, 1, "AUT-2026"); ws.cell(5, 3, 11); ws.cell(5, 5, "2026-5xx / 2026-6xx")
+    rates = wb.create_sheet("Rates")                        # per-session family rates, rows 4-6
+    for row, rate in ((4, 19.5), (5, 34.5), (6, 46.0)): rates.cell(row, 3, rate)
+    cfg = config_for(wb)
+    assert (cfg.term_cur, cfg.term_prior) == ("AUT-2026", "JAN-2026")
+    assert cfg.cur_series == (500, 699) and cfg.prior_series == (0, 199)
+    assert dict(cfg.fee_bases)["AUT-2026"] == (214.5, 379.5, 506.0)
+
+
 # ------------------------------------------------------------------ evidence and decisions
 
 def test_exact_surname_is_tier_b():

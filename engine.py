@@ -48,6 +48,12 @@ class Config:
     min_alias_len: int = 4             # shorter payer keys are too ambiguous to trust as aliases
     # Fee bases per term: 11 and 21 sessions x sibling tiers. Used only to label amounts.
     fee_bases: tuple = (("AUT-2025", (214.5, 379.5, 506.0)), ("JAN-2026", (409.5, 724.5, 966.0)))
+    # Inclusive (low, high) bounds on the three-digit part of an invoice number. Needed only when a
+    # term and the one before it fall in the same year - autumn 2026 issues 2026-5xx where the
+    # January 2026 term issued 2026-0xx, and the year cannot separate them. Empty means the year
+    # decides alone, which is what a term whose predecessor is in another year relies on.
+    cur_series: tuple = ()
+    prior_series: tuple = ()
 
     @property
     def year_cur(self) -> str:
@@ -57,11 +63,24 @@ class Config:
     def year_prior(self) -> str:
         return self.term_prior[-4:]
 
+    @staticmethod
+    def series_bounds(text) -> tuple:
+        """Inclusive (low, high) from a series written for people, "2026-5xx / 2026-6xx" -> (500, 699).
+        The Terms sheet and TermSpec both carry the human form; this is the one place it is read."""
+        nums = re.findall(r"(\d)xx", str(text or ""))
+        return (int(min(nums)) * 100, int(max(nums)) * 100 + 99) if nums else ()
+
+    def in_series(self, num: str, which: str) -> bool:
+        """Is this three-digit part inside that term's invoice series? True when none is set."""
+        lo_hi = self.cur_series if which == "cur" else self.prior_series
+        return not lo_hi or lo_hi[0] <= int(num) <= lo_hi[1]
+
     def ref_patterns(self):
         """Compiled regexes for a current-term reference (two spellings) and a prior-term one."""
         y, yy, py = self.year_cur, self.year_cur[2:], self.year_prior
         cur = (re.compile(rf"{y}\s*-?\s*(\d{{3}})"), re.compile(rf"(?<!\d){yy}(\d{{3}})(?!\d)"))
-        prior = re.compile(rf"{py}\s*-?\s*\d{{3}}|(?<!\d)2[1-4]\s*-?\s*1\d\d(?!\d)|(?<!\d)2[1-4]\d{{3}}(?!\d)")
+        prior = (re.compile(rf"{py}\s*-?\s*(\d{{3}})"),
+                 re.compile(r"(?<!\d)2[1-4]\s*-?\s*1\d\d(?!\d)|(?<!\d)2[1-4]\d{3}(?!\d)"))
         return cur, prior
 
 
@@ -298,11 +317,16 @@ class Receipt:
 
 
 def parse_refs(memo: str, cfg: Config) -> tuple[str, str]:
-    """Pull a current-term reference (normalised to YYYY-nnn) and, failing that, a prior-term one."""
-    (cur_a, cur_b), prior = cfg.ref_patterns()
-    m = cur_a.search(memo) or cur_b.search(memo)
+    """Pull a current-term reference (normalised to YYYY-nnn) and, failing that, a prior-term one.
+
+    A number counts for a term only if it is in that term's series as well as its year, so that two
+    terms sharing a year stay apart. Where no series is configured the year decides on its own.
+    """
+    (cur_a, cur_b), (prior_a, prior_b) = cfg.ref_patterns()
+    first = lambda pat, which: next((m for m in pat.finditer(memo) if cfg.in_series(m.group(1), which)), None)
+    m = first(cur_a, "cur") or first(cur_b, "cur")
     cur_ref = f"{cfg.year_cur}-{m.group(1)}" if m else ""
-    pm = prior.search(memo)
+    pm = first(prior_a, "prior") or prior_b.search(memo)
     prior_ref = pm.group(0) if (pm and not cur_ref) else ""
     return cur_ref, prior_ref
 
