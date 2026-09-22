@@ -16,24 +16,25 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from terms import TERM_IDS, default_term   # noqa: E402  - the one place a term is defined
+from sources import ROSTER_COLS, ROSTER_REQUIRED, BANK_COLS, BANK_POSITIONAL, bank_header   # noqa: E402
 
 # The term a roster is checked against: the same one build_ledger.py would build by default.
 DEFAULT_TERM = default_term()
 YEAR = DEFAULT_TERM[-4:]
 
-# build_ledger.py:29-57. The roster is read by name; every one of these must be present.
-ROSTER_REQUIRED = {
-    "Statut:": 'enrolment status. Rows counted as enrolled are exactly those equal to "Inscrit".',
-    "LES ELEVES": "pupil name. SURNAME in capitals first, then first name.",
-    "INVOICE NUMBER": "invoice number for the term, e.g. 2026-004.",
-    "FEES": "tuition invoiced. Blank means the child was not invoiced.",
-    "OFFICE SUPPLIES": "supplies charge. A negative value is read as a discount.",
-    "REG FEES ONE OFF": "one-off registration fee, or blank.",
-    "PAID": 'free text, e.g. "paid" / "part paid".',
+# The roster is read by heading through sources.ROSTER_COLS; any listed alias will do.
+ROSTER_WHAT = {
+    "status":   'enrolment status. "Inscrit" is enrolled; blank with an invoice and a fee is a late enrolment.',
+    "pupil":    "pupil name. SURNAME in capitals first, then first name; first-name-first rows are read the other way round.",
+    "invoice":  "invoice number for the term, e.g. 2026-004.",
+    "fees":     "tuition invoiced. Blank means the child was not invoiced.",
+    "supplies": "supplies charge. A negative value is read as a discount.",
+    "reg":      "one-off registration fee, or blank.",
+    "paid":     'free text, e.g. "paid" / "part paid".',
 }
 
-# build_ledger.py:125-128. The bank file is read with header=None and named positionally.
-BANK_POSITIONS = ["date", "amount", "memo", "cat", "note", "extra"]
+# The bank file is read by heading when its first row has one, else positionally as sources.BANK_POSITIONAL.
+BANK_POSITIONS = BANK_POSITIONAL
 
 OK, BAD, WARN = "  ok  ", " FAIL ", " warn "
 
@@ -53,14 +54,19 @@ def check_roster(path):
     line(OK, f"read {len(df)} rows, {len(df.columns)} columns")
 
     ok = True
-    for col, what in ROSTER_REQUIRED.items():
-        if col in df.columns:
-            line(OK, f'column "{col}" found')
-        else:
+    known = set()
+    for field_, aliases in ROSTER_COLS.items():
+        found = next((a for a in aliases if a in df.columns), None)
+        if found:
+            known.add(found)
+            line(OK, f'{field_}: column "{found}" found')
+        elif field_ in ROSTER_REQUIRED:
             ok = False
-            line(BAD, f'column "{col}" MISSING - {what}')
+            line(BAD, f'{field_}: none of {", ".join(aliases)} present - {ROSTER_WHAT[field_]}')
+        else:
+            line(WARN, f'{field_}: none of {", ".join(aliases)} present - optional; {ROSTER_WHAT[field_]}')
 
-    extra = [c for c in df.columns if c not in ROSTER_REQUIRED and not c.startswith("Unnamed")]
+    extra = [c for c in df.columns if c not in known and not c.startswith("Unnamed")]
     if extra:
         line(WARN, f"columns present but never read: {', '.join(extra[:8])}")
         print("        (harmless - but check none of them is your real invoice/fee column"
@@ -112,6 +118,19 @@ def check_bank(path):
     if len(raw.columns) < 3:
         line(BAD, f"need at least 3 columns (date, amount, memo), found {len(raw.columns)}")
         return False
+
+    if len(raw) and bank_header(raw.iloc[0]):
+        # A headed export (Barclays) is read by name, so column order does not matter.
+        head = [str(x).strip() for x in raw.iloc[0]]
+        ok = True
+        for field_, aliases in BANK_COLS.items():
+            found = next((a for a in aliases if a in head), None)
+            if found:
+                line(OK, f'{field_}: column "{found}" found (read by heading)')
+            elif field_ != "cat":
+                ok = False
+                line(BAD, f'{field_}: no column named {" or ".join(aliases)} in the header row')
+        return ok
 
     print("\n        read positionally as:", ", ".join(BANK_POSITIONS[:len(raw.columns)]))
     print("        first row of your file:")

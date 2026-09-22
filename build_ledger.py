@@ -21,6 +21,7 @@ from openpyxl.comments import Comment
 
 from terms import default_term, resolve
 from engine import Config as EngineConfig
+from sources import ROSTER_COLS, BANK_COLS, BANK_POSITIONAL, NOT_A_RECEIPT, INVOICE_BLANKS, NAME_NOISE, bank_header
 
 def parse_args(argv):
     """Split '<roster> <bank> <out> [--term ID]' into three paths and the chosen term entry.
@@ -52,37 +53,9 @@ TERM_CUR, TERM_PRIOR = CUR["id"], PRIOR["id"]
 YEAR_CUR, YEAR_PRIOR = TERM_CUR[-4:], TERM_PRIOR[-4:]
 
 # ================================================================ source files
-# Each canonical field lists every heading it has been seen under, most recent first. A roster with
-# a new heading is one string added here; the code below never names a heading directly.
-ROSTER_COLS = {
-    "status":   ("Statut:",),
-    "pupil":    ("LES ELEVES",),
-    "invoice":  ("INVOICE NUMBER", "INVOICE N"),
-    "fees":     ("FEES", "REG FEE"),
-    "supplies": ("OFFICE SUPPLIES", "SUPPLIES"),
-    "reg":      ("REG FEES ONE OFF", "ONEOFF REG"),
-    "paid":     ("PAID",),
-}
-# The bank export is read by heading when it has one and by position when it does not. Barclays
-# puts the columns in a different order from the fixture, so position alone is not enough.
-BANK_COLS = {
-    "date":   ("Date",),
-    "amount": ("Amount",),
-    "memo":   ("Memo",),
-    "cat":    ("Subcategory", "Category"),
-}
-BANK_POSITIONAL = ["date", "amount", "memo", "cat", "note", "extra"]
-# Invoice numbers as typed. A stray letter in the year is a typo for the same invoice; a question
-# mark is the office saying it has not issued one yet, which is not an invoice number at all.
+# Headings, filters and noise words live in sources.py, shared with preflight.py. A stray letter in
+# the invoice year is a typo for the same invoice.
 INVOICE_FIXES = ((re.compile(r"^(\d{4})[A-Za-z]+-"), r"\1-"),)
-INVOICE_BLANKS = frozenset({"?", "??", "-", "n/a", "tbc", "nan"})
-# Words the office types beside a name that are not part of it: FRATERIE marks a sibling group,
-# ESSAIS a trial. Left in, they become surname evidence the bank memo will never match.
-NAME_NOISE = frozenset({"FRATERIE", "FRERE", "SOEUR", "ESSAIS", "ESSAI", "NOUVEAU", "NOUVELLE"})
-# Outgoing lines in these categories are the school's own spending, not a fee receipt. Only
-# negative amounts are ever dropped, so no incoming money can be lost to this filter.
-NOT_A_RECEIPT = frozenset({"direct debit", "contactless card purchase", "bill payment",
-                           "card purchase", "debit", "standing order", "credit payment"})
 # When a term and the one before it share a year, the invoice series in terms.py is what tells
 # their references apart: autumn 2026 issues 2026-5xx where January 2026 issued 2026-0xx. Read
 # from the same text the Terms sheet shows, so build_ledger.py and reconcile.py cannot disagree.
@@ -261,7 +234,7 @@ b = pd.read_excel(BANK, header=None)
 # The fixture has no header and a fixed column order. Barclays writes a header row and orders the
 # columns differently, so when a header is there the columns are taken by name and never by index.
 head = [str(x).strip() for x in b.iloc[0]] if len(b) else []
-if any(h in head for h in BANK_COLS["memo"] + BANK_COLS["amount"]):
+if len(b) and bank_header(b.iloc[0]):
     at = {f: next((head.index(n) for n in names_ if n in head), None) for f, names_ in BANK_COLS.items()}
     missing = [f for f, i in at.items() if i is None and f != "cat"]
     if missing:
