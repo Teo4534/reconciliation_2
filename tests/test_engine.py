@@ -154,11 +154,11 @@ def test_truncated_surname_is_fuzzy_tier_c_not_allocated():
 
 
 def test_possessive_memo_does_not_become_another_familys_surname():
-    """MARTIN'S FEES is the Martin family's, not the Martins family's; ADAM'S FEES, where Adam is
+    """SIMON'S FEES is the Simon family's, not the Simons family's; ADAM'S FEES, where Adam is
     a child of one family and ADAMS the surname of another, stays a tie sent to review."""
-    r = roster(FAM_010=("MARTIN", "Maya", "2026-010"), FAM_011=("MARTINS", "Zak", "2026-011"))
-    tier, fid, cands, why = decide(evidence("MARTIN'S FEES", r, CFG), r)
-    assert (tier, fid, why) == ("B", "FAM-010", "surname MARTIN")
+    r = roster(FAM_010=("SIMON", "Maya", "2026-010"), FAM_011=("SIMONS", "Zak", "2026-011"))
+    tier, fid, cands, why = decide(evidence("SIMON'S FEES", r, CFG), r)
+    assert (tier, fid, why) == ("B", "FAM-010", "surname SIMON")
     r = roster(FAM_001=("ADAMS", "Zoe", "2026-001"), FAM_002=("OTHER", "Adam", "2026-002"))
     tier, fid, cands, why = decide(evidence("ADAM'S FEES", r, CFG), r)
     assert tier not in CFG.auto_tiers and fid == ""

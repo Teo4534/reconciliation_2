@@ -129,7 +129,7 @@ def parse_name(raw):
         clean = [tok for tok in toks if re.search(r"[A-Za-zÀ-ÿ]", tok) and tok.upper() not in NAME_NOISE]
         if len(clean) >= 2:
             # Title case throughout, so the roster's surname-first rule does not apply. The last
-            # token is the surname. A middle name must not join it: "Grace Bayo Chen" is CHEN, or
+            # token is the surname. A middle name must not join it: "Grace Bayo Vasseur" is VASSEUR, or
             # BAYO becomes surname evidence for a child who is not a Bayo. A lower-case tail is a
             # particle, so the token before it is pulled in: "Aisha Ndiaye diop" is NDIAYE DIOP.
             cut = len(clean) - 1
@@ -193,8 +193,8 @@ for i, r in s.iterrows():
                      paid=paid, note=note, inferred=inferred, raw=str(cell("pupil"))))
 ch = pd.DataFrame(rows)
 
-# An inferred surname yields to the roster's own evidence. "Martin Lucas" on invoice 2026-999,
-# where MARTIN Ines and MARTIN Jules already sit, is a third Martin child, not a Lucas: a token
+# An inferred surname yields to the roster's own evidence. "Vincent Bernard" on invoice 2026-999,
+# where VINCENT Ines and VINCENT Jules already sit, is a third Vincent child, not a Bernard: a token
 # of the name equals the surname of a properly written row on the same invoice. That is two
 # independent facts agreeing, so the inferred reading is replaced and the family stays whole.
 known = ch[~ch.inferred & (ch.inv != "")].groupby("inv")["sur"].agg(set)
