@@ -12,7 +12,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 import pytest
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 
 ROOT = Path(__file__).resolve().parent.parent
 AUTO_TIERS = {"M", "A", "B"}
@@ -253,6 +253,59 @@ def test_a_different_term_needs_no_code_edit(tmp_path):
                           str(tmp_path / "bad.xlsx"), "--term", "SPRING-1999"],
                          cwd=ROOT, capture_output=True, text=True)
     assert bad.returncode != 0 and "unknown term" in bad.stdout + bad.stderr
+
+
+def test_the_roster_is_found_inside_the_office_workbook(tmp_path):
+    """The office keeps the roster in a master workbook, not in a clean one-sheet file.
+
+    Several sheets (a waiting list, staff, one sheet per year), and on the roster sheet four rows
+    of teacher and class names above the headings. The first real run needed that sheet copied out
+    by hand with the top rows deleted. build_ledger.py and preflight.py must find the roster
+    themselves: the first sheet whose top rows carry a heading row naming every required field,
+    and the same ledger must come out as from the clean file.
+    """
+    run(ROOT / "generate_fake_data.py", tmp_path, "--seed", 20260101)
+    plain, bank = tmp_path / "roster.xlsx", tmp_path / "bank.xlsx"
+    rows = list(load_workbook(plain, read_only=True).active.iter_rows(values_only=True))
+
+    master = tmp_path / "master.xlsx"
+    book = Workbook()
+    waiting = book.active                              # a class list: has LES ELEVES, no invoice or fee
+    waiting.title = "Liste d'Attente"
+    waiting.append([None, "LES ELEVES"])
+    waiting.append(["STATUT", "NOM PRENOM", "Dob"])
+    waiting.append(["en attente", "PLACEHOLDER Enfant", None])
+    old = book.create_sheet("CLASSES 2019-2020")       # last year's sheet: names only
+    old.append([None] * 5 + ["Enseignant(e):", "Mme Untel"])
+    old.append(["Statut:", "LES ELEVES", "Dob"])
+    old.append(["Inscrit", "ANCIEN Eleve", None])
+    current = book.create_sheet("CLASSES 2026-2027")   # the roster, under four rows of furniture
+    for furniture in ("Enseignant(e):", "Assistant(e):", "Nom de la Classe:", "Noms des salles"):
+        current.append([None] * 5 + [furniture, "Mme Untel", "M. Tel"])
+    for r in rows:
+        current.append(list(r))
+    book.create_sheet("STAFF MEMBERS").append(["Nom", "Role"])
+    book.save(master)
+
+    from_plain, from_master = tmp_path / "plain.xlsx", tmp_path / "wrapped.xlsx"
+    run(ROOT / "build_ledger.py", plain, bank, from_plain)
+    out = run(ROOT / "build_ledger.py", master, bank, from_master)
+    assert "'CLASSES 2026-2027'" in out and "headings on row 5" in out
+
+    a, b = load_workbook(from_plain, data_only=True), load_workbook(from_master, data_only=True)
+    for sheet in ("Children", "Families", "Receipts"):
+        assert list(a[sheet].iter_rows(values_only=True)) == list(b[sheet].iter_rows(values_only=True)), sheet
+
+    pre = subprocess.run([sys.executable, str(ROOT / "preflight.py"), str(master), str(bank)],
+                         cwd=ROOT, capture_output=True, text=True)
+    assert 'roster on sheet "CLASSES 2026-2027", headings on row 5' in pre.stdout, pre.stdout
+
+    # A workbook with no roster sheet stops the build and says what it looked for.
+    empty = tmp_path / "empty.xlsx"
+    Workbook().save(empty)
+    bad = subprocess.run([sys.executable, str(ROOT / "build_ledger.py"), str(empty), str(bank),
+                          str(tmp_path / "bad.xlsx")], cwd=ROOT, capture_output=True, text=True)
+    assert bad.returncode != 0 and "no sheet has a heading row" in bad.stdout + bad.stderr
 
 
 def test_the_workbook_has_the_sheets_a_reviewer_needs(pipeline):
