@@ -18,6 +18,9 @@ Do not edit tests to make them pass; if a test is wrong, say so and stop.
 - `engine.py`      allocation logic. Add behaviour here. Keep functions pure.
 - `reconcile.py`   loads the ledger, calls the engine, writes Review / Position / Summary.
 - `build_ledger.py` roster + bank export -> structured workbook.
+- `terms.py`       the school's terms as data. Next term is a new entry here and `--term`, never an edit elsewhere.
+- `sources.py`     roster and bank headings as data, and where the roster sits in a workbook. Shared by the two below.
+- `preflight.py`   checks a real roster and bank export against `sources.py` before a run. Changes nothing.
 - `score.py`       accuracy against ground truth, by failure mode.
 - `tests/test_engine.py`   fast unit tests (ms). Add one for every new behaviour.
 - `tests/test_pipeline.py` end-to-end over three generated seeds.

@@ -66,7 +66,7 @@ class Config:
     @staticmethod
     def series_bounds(text) -> tuple:
         """Inclusive (low, high) from a series written for people, "2026-5xx / 2026-6xx" -> (500, 699).
-        The Terms sheet and TermSpec both carry the human form; this is the one place it is read."""
+        The Terms sheet and terms.py both carry the human form; this is the one place it is read."""
         nums = re.findall(r"(\d)xx", str(text or ""))
         return (int(min(nums)) * 100, int(max(nums)) * 100 + 99) if nums else ()
 
