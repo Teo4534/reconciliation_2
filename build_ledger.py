@@ -21,7 +21,8 @@ from openpyxl.comments import Comment
 
 from terms import default_term, resolve
 from engine import Config as EngineConfig
-from sources import ROSTER_COLS, BANK_COLS, BANK_POSITIONAL, NOT_A_RECEIPT, INVOICE_BLANKS, NAME_NOISE, bank_header
+from sources import (ROSTER_COLS, ROSTER_REQUIRED, HEADER_SCAN_ROWS, BANK_COLS, BANK_POSITIONAL,
+                     NOT_A_RECEIPT, INVOICE_BLANKS, NAME_NOISE, locate_roster, bank_header)
 
 def parse_args(argv):
     """Split '<roster> <bank> <out> [--term ID]' into three paths and the chosen term entry.
@@ -78,11 +79,19 @@ def pick(df, field_):
             return name
     return None
 
-s = pd.read_excel(ROSTER)
+# The roster may arrive as the office's whole workbook: the right sheet among several, with rows of
+# teacher and class names above the headings. Find it rather than assume sheet 1, row 1.
+where = locate_roster(ROSTER)
+if where is None:
+    top = pd.read_excel(ROSTER, header=None, nrows=HEADER_SCAN_ROWS)
+    seen = [str(v) for v in top.iloc[0].dropna()][:8] if len(top) else []
+    need = ", ".join(ROSTER_COLS[f][0] for f in ROSTER_REQUIRED)
+    sys.exit(f"{ROSTER}: no sheet has a heading row naming {need} in its first {HEADER_SCAN_ROWS} rows. "
+             f"First sheet starts: {seen}")
+ROSTER_SHEET, ROSTER_HEADER = where
+s = pd.read_excel(ROSTER, sheet_name=ROSTER_SHEET, header=ROSTER_HEADER)
 s.columns = [str(c).strip() for c in s.columns]
 C = {f: pick(s, f) for f in ROSTER_COLS}
-if not C["pupil"] or not C["invoice"]:
-    sys.exit(f"{ROSTER}: no pupil or invoice column. Headings found: {list(s.columns)[:12]}")
 # A spreadsheet carries its own furniture: a grand-total row at the foot, blank spacer rows, and
 # (in the real export) thousands of empty columns Excel invented. Keep only rows that name a pupil.
 s = s[s[C["pupil"]].notna() & (s[C["status"]].astype(str).str.strip() != "Total:")].copy()
@@ -500,6 +509,7 @@ widths(ws, [11, 11, 22, 24, 10, 14, 11, 9, 6, 11, 16, 60, 20, 40, 46])
 ws.freeze_panes = "C4"; ws.auto_filter.ref = f"A3:O{3 + len(rc)}"
 
 wb.save(OUT)
+print("roster sheet", repr(ROSTER_SHEET), "| headings on row", ROSTER_HEADER + 1)
 print("saved", OUT, "| children", len(ch), "| families", len(fam), "| receipts", len(rc))
 print("statuses", ch.status.value_counts().to_dict(), "| rows not in SURNAME-first form", n_late)
 if n_not_fee:

@@ -3,9 +3,11 @@ preflight.py - check a real roster and bank export against what build_ledger.py 
 
     python3 preflight.py STUDENTS_2026.xlsx BANK.xlsx
 
-build_ledger.py reads both files by exact column name (roster) and by column position (bank).
-Neither adapts. A roster with the right data under the wrong heading raises KeyError; a bank
-export with the columns in a different order produces wrong answers silently, which is worse.
+build_ledger.py reads the roster by heading, under any alias listed in sources.py, on whichever
+sheet and row of the workbook carries those headings. It reads the bank export by heading when the
+file has one, else by column position. A roster whose headings are spelled some new way is skipped
+entirely; a headerless bank export with the columns in a different order produces wrong answers
+silently, which is worse.
 
 This reports what it found, what is missing, and what to do about it. It changes nothing.
 """
@@ -16,7 +18,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from terms import TERM_IDS, default_term   # noqa: E402  - the one place a term is defined
-from sources import ROSTER_COLS, ROSTER_REQUIRED, BANK_COLS, BANK_POSITIONAL, bank_header   # noqa: E402
+from sources import (ROSTER_COLS, ROSTER_REQUIRED, HEADER_SCAN_ROWS, BANK_COLS, BANK_POSITIONAL,   # noqa: E402
+                     locate_roster, bank_header)
 
 # The term a roster is checked against: the same one build_ledger.py would build by default.
 DEFAULT_TERM = default_term()
@@ -46,19 +49,29 @@ def line(status, text):
 def check_roster(path):
     print(f"\n=== roster: {path} ===")
     try:
-        df = pd.read_excel(path)
+        where = locate_roster(path)
     except Exception as e:
         line(BAD, f"could not read as .xlsx: {e}")
         return False
+    if where is None:
+        need = ", ".join(ROSTER_COLS[f][0] for f in ROSTER_REQUIRED)
+        line(BAD, f"no sheet has a heading row naming {need} in its first {HEADER_SCAN_ROWS} rows")
+        print(f"        sheets in this workbook: {pd.ExcelFile(path).sheet_names}")
+        print("        build_ledger.py takes the first sheet whose top rows carry those headings."
+              " Check the roster sheet is in this file and its headings are spelled as above;"
+              " a new spelling is one alias added to sources.ROSTER_COLS.")
+        return False
+    sheet, hdr = where
+    df = pd.read_excel(path, sheet_name=sheet, header=hdr)
     df.columns = [str(c).strip() for c in df.columns]
-    line(OK, f"read {len(df)} rows, {len(df.columns)} columns")
+    line(OK, f'roster on sheet "{sheet}", headings on row {hdr + 1}: {len(df)} rows, {len(df.columns)} columns')
 
     ok = True
-    known = set()
+    col = {}
     for field_, aliases in ROSTER_COLS.items():
         found = next((a for a in aliases if a in df.columns), None)
         if found:
-            known.add(found)
+            col[field_] = found
             line(OK, f'{field_}: column "{found}" found')
         elif field_ in ROSTER_REQUIRED:
             ok = False
@@ -66,24 +79,26 @@ def check_roster(path):
         else:
             line(WARN, f'{field_}: none of {", ".join(aliases)} present - optional; {ROSTER_WHAT[field_]}')
 
-    extra = [c for c in df.columns if c not in known and not c.startswith("Unnamed")]
+    extra = [c for c in df.columns if c not in col.values() and not c.startswith("Unnamed")]
     if extra:
         line(WARN, f"columns present but never read: {', '.join(extra[:8])}")
         print("        (harmless - but check none of them is your real invoice/fee column"
               " under a different name)")
 
-    if "Statut:" in df.columns:
-        counts = df["Statut:"].astype(str).str.strip().value_counts()
-        enrolled = int(counts.get("Inscrit", 0))
+    if "status" in col:
+        raw = df[col["status"]]
+        counts = raw.dropna().astype(str).str.strip().value_counts()
+        enrolled, blank = int(counts.get("Inscrit", 0)), int(raw.isna().sum())
         if enrolled:
-            line(OK, f'{enrolled} rows have Statut: = "Inscrit" and will be treated as enrolled')
+            line(OK, f'{enrolled} rows have {col["status"]} = "Inscrit" and will be treated as enrolled'
+                     + (f"; {blank} with a blank status are enrolled if they carry an invoice and a fee" if blank else ""))
         else:
             ok = False
-            line(BAD, 'no row has Statut: = "Inscrit" - every pupil would be dropped')
+            line(BAD, f'no row has {col["status"]} = "Inscrit" - every pupil would be dropped')
             print(f"        values actually present: {dict(list(counts.items())[:6])}")
 
-    if "LES ELEVES" in df.columns:
-        sample = [str(v) for v in df["LES ELEVES"].dropna().head(3)]
+    if "pupil" in col:
+        sample = [str(v) for v in df[col["pupil"]].dropna().head(3)]
         bad = [s for s in sample if not any(t.isupper() and len(t) > 1 for t in s.split())]
         if bad:
             line(WARN, "pupil names may not parse - the surname must be in CAPITALS, first")
@@ -91,8 +106,8 @@ def check_roster(path):
         else:
             line(OK, f"pupil name format looks parseable, e.g. {sample[:2]}")
 
-    if "INVOICE NUMBER" in df.columns:
-        refs = df["INVOICE NUMBER"].dropna().astype(str).str.strip()
+    if "invoice" in col:
+        refs = df[col["invoice"]].dropna().astype(str).str.strip()
         matching = refs.str.match(rf"^\s*{YEAR}\s*-?\s*\d{{3}}").sum()
         if len(refs) and matching == 0:
             ok = False
