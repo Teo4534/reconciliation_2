@@ -163,6 +163,15 @@ The roster can be the office's whole workbook. Both scripts find the sheet and t
 themselves: the first sheet whose top rows name the required columns, however many rows of teacher
 and class names sit above them. Nothing needs copying out or deleting first.
 
+Before pushing anything written while the real files were open, run the name check. It scans the
+tracked files and the unpushed commit messages for any surname on the roster or any word of a
+payer's name on a receipt, and fails on a hit. `--ignore WORD,WORD` waves through tokens that are
+plainly words, and prints them, so the person reviewing the push sees what was waved.
+
+```bash
+python3 namecheck.py your_roster.xlsx your_bank.xlsx
+```
+
 ## What the bank actually sends
 
 The memo is a fixed-width field with 23 characters of payer name, then a 21-character reference slot
@@ -420,6 +429,7 @@ sources.py              the roster and bank headings as data, and how the roster
 generate_fake_data.py   fictional roster + bank export + ground truth
 score.py                accuracy against ground truth, by failure mode, against a naive baseline
 preflight.py            checks a real roster and bank export before you run the pipeline
+namecheck.py            checks tracked files and unpushed commit messages for real names before you push
 check.sh                the gate: unit tests, end-to-end on three seeds, WRONG must be 0
 .github/workflows/      runs check.sh on every push and pull request
 tests/test_engine.py    50 unit tests on the matching rules (no workbook needed)

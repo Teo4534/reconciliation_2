@@ -14,6 +14,14 @@ Sending a line to Review is a cost. Crediting the wrong family is a wrong answer
 Run `./check.sh`. All three gates must pass. Paste the last four lines of its output in your report.
 Do not edit tests to make them pass; if a test is wrong, say so and stop.
 
+## Before you push
+Nothing derived from a real roster or bank export goes into any tracked file or commit message:
+no surname, no payer, no note. Examples use invented names. If real files were open while you
+wrote docs, comments, tests or messages, run `python3 namecheck.py <roster> <bank>` and fix every
+hit before pushing. An invented name that turns out to be a real one on this term's files counts.
+`--ignore` is for tokens that are plainly words (a colour, a verb), never for a name; what was
+ignored is printed in the summary, so say so in the PR.
+
 ## Layout
 - `engine.py`      allocation logic. Add behaviour here. Keep functions pure.
 - `reconcile.py`   loads the ledger, calls the engine, writes Review / Position / Summary.
@@ -21,6 +29,7 @@ Do not edit tests to make them pass; if a test is wrong, say so and stop.
 - `terms.py`       the school's terms as data. Next term is a new entry here and `--term`, never an edit elsewhere.
 - `sources.py`     roster and bank headings as data, and where the roster sits in a workbook. Shared by the two below.
 - `preflight.py`   checks a real roster and bank export against `sources.py` before a run. Changes nothing.
+- `namecheck.py`   scans tracked files and unpushed commit messages for names from the real files. Run before a push.
 - `score.py`       accuracy against ground truth, by failure mode.
 - `tests/test_engine.py`   fast unit tests (ms). Add one for every new behaviour.
 - `tests/test_pipeline.py` end-to-end over three generated seeds.
