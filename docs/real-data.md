@@ -51,12 +51,37 @@ Five adversarial reviewers (one lens each) plus one skeptic per finding, after t
 - `Moreau Lea Fontaine` is ambiguous under either name order. Rename it `MOREAU Lea Fontaine` on the roster.
 - One payment from a family not on the term roster (`GARNIER`).
 
+## Second run: the workbook as the office keeps it
+
+The first run's roster was a one-sheet file made by hand: the office's master workbook opened,
+the year's sheet copied out, the four rows of teacher and class names above the headings deleted.
+The second run, from another machine, was handed the master workbook itself. Nine sheets: one per
+year back to 2021, a waiting list, staff, duties. The year sheets all say `Statut:` and
+`LES ELEVES`; only the current one has the invoice and fee columns. On it the headings are row 5.
+
+`build_ledger.py` read sheet 1 from row 1, found teacher names where headings should be, and
+stopped. `preflight.py` said the same in more words. Both were right and both were useless.
+
+- **`sources.locate_roster`** scans each sheet's first twelve rows for a row naming every required
+  field, and returns the first sheet and row that do. Older years' sheets fail on the invoice and
+  fee columns, so they are never picked. A clean one-sheet file is the trivial case.
+- `build_ledger.py` and `preflight.py` both read through it, and both print which sheet and row
+  they used, so the office can see the tool chose the sheet it meant.
+- `preflight.py` also now checks the invoice column it actually found rather than one spelled
+  `INVOICE NUMBER`, which the real roster never says, so that check had been silently skipped.
+- One end-to-end test wraps the generated roster in a workbook shaped like the office's (decoy
+  sheets before and after, furniture above) and asserts the same ledger comes out.
+
+Same 213 roster rows, same 89 receipts, same allocations as the first run.
+
 ## How to run
 
 ```
-pip install xlrd
-python build_ledger.py roster.xlsx bank.xls ledger.xlsx --term AUT-2026
+pip install -r requirements.txt
+python preflight.py "Master workbook.xlsx" bank.xls
+python build_ledger.py "Master workbook.xlsx" bank.xls ledger.xlsx --term AUT-2026
 python reconcile.py ledger.xlsx
 ```
 
-Keep real files outside the repository or under an ignored name.
+The roster argument may be the office's whole workbook. Keep real files outside the repository or
+under an ignored name.
