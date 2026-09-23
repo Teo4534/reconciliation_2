@@ -159,6 +159,10 @@ what `build_ledger.py` requires and tells you what is missing, without changing 
 python3 preflight.py your_roster.xlsx your_bank.xlsx
 ```
 
+The roster can be the office's whole workbook. Both scripts find the sheet and the heading row
+themselves: the first sheet whose top rows name the required columns, however many rows of teacher
+and class names sit above them. Nothing needs copying out or deleting first.
+
 ## What the bank actually sends
 
 The memo is a fixed-width field with 23 characters of payer name, then a 21-character reference slot
@@ -412,12 +416,13 @@ engine.py               allocation logic: pure functions, writes no Excel, unit-
 reconcile.py            loads the ledger, calls the engine, writes Position / Review / Summary
 build_ledger.py         roster + bank  ->  structured workbook
 terms.py                the school's terms as data: sessions, invoice series, receipt windows
+sources.py              the roster and bank headings as data, and how the roster is found inside a workbook
 generate_fake_data.py   fictional roster + bank export + ground truth
 score.py                accuracy against ground truth, by failure mode, against a naive baseline
 preflight.py            checks a real roster and bank export before you run the pipeline
 check.sh                the gate: unit tests, end-to-end on three seeds, WRONG must be 0
 .github/workflows/      runs check.sh on every push and pull request
-tests/test_engine.py    21 unit tests on the matching rules (no workbook needed)
+tests/test_engine.py    50 unit tests on the matching rules (no workbook needed)
 tests/test_pipeline.py  end-to-end tests over 3 generated datasets, and a second term
 examples/               generated data and the resulting ledger
 ```
