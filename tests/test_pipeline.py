@@ -210,6 +210,57 @@ def test_the_fee_rules_reproduce_the_invoices(pipeline):
         f"the planted {PLANTED_SUPPLIES_ERROR:.2f} supplies error was not detected: {mismatched}"
 
 
+def test_position_rows_are_banded_and_each_fill_matches_its_status(pipeline):
+    """Position reads top to bottom as chase / check / done, and a row's colour agrees with its Status.
+
+    The static fills were computed from the amount the office invoiced while the Status formula used
+    the fee rules, so a family the rules priced £8 above its invoice was painted red under a Status of
+    settled. Both now come from the rules figure. This recomputes it the way the workbook does and
+    checks every row's fill, then that the fills come red, then amber, then green.
+    """
+    wb = pipeline["wb"]
+    wp, ch, rc = wb["Position"], wb["Children"], wb["Receipts"]
+    term = wb["Terms"].cell(5, 1).value
+    f = fee_inputs(wb)
+    enrolled = [r for r in ch.iter_rows(min_row=4, values_only=True) if r[0] and r[5] == "Enrolled"]
+    siblings = Counter(r[1] for r in enrolled)
+    rules = defaultdict(float)
+    for r in enrolled:
+        if r[6] == term:
+            rules[r[1]] += expected_charge(r, siblings[r[1]], f)
+    got, review = defaultdict(float), Counter()
+    for r in rc.iter_rows(min_row=4, values_only=True):
+        if r[0] is None:
+            break
+        if r[8] in AUTO_TIERS and r[9]:
+            if r[4] == term:
+                got[r[9]] += float(r[1] or 0)
+        elif r[8] not in AUTO_TIERS and r[10]:
+            for c in str(r[10]).split(","):
+                review[c.strip()] += 1
+    RED, AMBER, GREEN = "00FCE4E4", "00FFF2CC", "00E2EFDA"
+    bands = []
+    for row in wp.iter_rows(min_row=5, max_row=wp.max_row):
+        fid = row[0].value
+        if not fid:
+            break
+        exp, g = round(rules[fid], 2), round(got[fid], 2)
+        bal = round(exp - g, 2)
+        if exp == 0:
+            st = "no charge"
+        elif g <= 0:
+            st = "in review" if review[fid] else "unpaid"
+        elif abs(bal) <= 0.5:
+            st = "settled"
+        else:
+            st = "part paid" if bal > 0 else "overpaid"
+        look = bool(row[12].value)
+        want = AMBER if (look or st in ("in review", "overpaid")) else RED if st in ("unpaid", "part paid") else GREEN
+        assert row[0].fill.fgColor.rgb == want, f"{fid}: status {st}, balance {bal}, fill {row[0].fill.fgColor.rgb}"
+        bands.append((RED, AMBER, GREEN).index(want))
+    assert bands and bands == sorted(bands), "Position rows are not grouped red, then amber, then green"
+
+
 def test_no_money_disappears(pipeline):
     total = sum(g["amount"] for g, _ in pipeline["pairs"])
     allocated = sum(g["amount"] for g, _ in pipeline["pairs"] if g["tier"] in AUTO_TIERS)
@@ -306,6 +357,25 @@ def test_the_roster_is_found_inside_the_office_workbook(tmp_path):
     bad = subprocess.run([sys.executable, str(ROOT / "build_ledger.py"), str(empty), str(bank),
                           str(tmp_path / "bad.xlsx")], cwd=ROOT, capture_output=True, text=True)
     assert bad.returncode != 0 and "no sheet has a heading row" in bad.stdout + bad.stderr
+
+
+def test_namecheck_finds_a_name_from_the_files_in_the_tracked_tree(tmp_path):
+    """namecheck.py exists because a real surname reached a Markdown file and a commit message.
+
+    Handed the generated roster and bank export as if they were real, it must find the fixture
+    families the README quotes on purpose, name the file and line, and exit 1. Base is HEAD so
+    no commit messages are in range; this checks the file scan, which is the part that matters.
+    """
+    run(ROOT / "generate_fake_data.py", tmp_path, "--seed", 20260101)
+    r = subprocess.run([sys.executable, str(ROOT / "namecheck.py"), str(tmp_path / "roster.xlsx"),
+                        str(tmp_path / "bank.xlsx"), "--base", "HEAD"], cwd=ROOT, capture_output=True, text=True)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "README.md:" in r.stdout and "MAALOUF" in r.stdout, r.stdout
+    # --ignore takes a word out and says so, so a reviewer sees what was waved through.
+    r2 = subprocess.run([sys.executable, str(ROOT / "namecheck.py"), str(tmp_path / "roster.xlsx"),
+                         str(tmp_path / "bank.xlsx"), "--base", "HEAD", "--ignore", "MAALOUF"],
+                        cwd=ROOT, capture_output=True, text=True)
+    assert "MAALOUF " not in r2.stdout and "ignored on request: MAALOUF" in r2.stdout, r2.stdout
 
 
 def test_the_workbook_has_the_sheets_a_reviewer_needs(pipeline):

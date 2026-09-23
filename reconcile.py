@@ -48,6 +48,36 @@ def widths(ws, w):
         ws.column_dimensions[get_column_letter(j)].width = x
 
 
+def rules_expected(wb, cfg):
+    """What each family owes by the fee rules this term: the figure Position's Expected column sums
+    from Children column R. Recomputed from the same cells (Rates, Terms, the blue columns of
+    Children) so the status the sheet shows and the colour Python paints cannot disagree. They did:
+    the fills used the invoiced amount, and a family the rules priced £8 above its invoice was
+    painted red under a Status that said settled."""
+    rates, terms, ch = wb["Rates"], wb["Terms"], wb["Children"]
+    sib = {n: float(rates.cell(3 + n, 3).value or 0) for n in (1, 2, 3, 4)}
+    wed_rate, reg, sup = (float(rates.cell(r, 3).value or 0) for r in (9, 11, 12))
+    sessions = {}
+    for r in (4, 5):
+        if terms.cell(r, 1).value:
+            sessions[terms.cell(r, 1).value] = {"Saturday": float(terms.cell(r, 3).value or 0),
+                                                "Wednesday": float(terms.cell(r, 4).value or 0)}
+    kids = [r for r in ch.iter_rows(min_row=4, values_only=True) if r[0] and r[5] == "Enrolled"]
+    siblings = Counter(r[1] for r in kids)
+    out = defaultdict(float)
+    for r in kids:
+        if r[6] != cfg.term_cur:
+            continue
+        cls = "Wednesday" if r[4] == "Wednesday" else "Saturday"
+        n = float(r[9]) if isinstance(r[9], (int, float)) else sessions.get(cfg.term_cur, {}).get(cls, 0.0)
+        k = siblings[r[1]]
+        rate = wed_rate if cls == "Wednesday" else sib[min(k, 4)] / k
+        addons = str(r[14] or "")
+        out[r[1]] += (round(rate * n, 2) - float(r[13] or 0)
+                      + (reg if "reg" in addons else 0.0) + (sup if "supplies" in addons else 0.0))
+    return {f: round(v, 2) for f, v in out.items()}
+
+
 def write_outputs(wb, rows, roster, cfg, report_date):
     """Write the engine's decisions into Receipts and build the Review, Position and Summary sheets."""
     ws = wb["Receipts"]
@@ -106,7 +136,8 @@ def write_outputs(wb, rows, roster, cfg, report_date):
 
     # ------------------------------------------------------------------ Position sheet (the answer sheet)
     wp = wb.create_sheet("Position")
-    put(wp, 1, 1, f"Position  -  {TERM_CUR}. One row per family. Green = settled. Red = owing. Amber = check the last two columns before chasing.", TITLE)
+    put(wp, 1, 1, f"Position  -  {TERM_CUR}. One row per family, grouped by colour. Red = owing (unpaid, part paid). "
+                  "Amber = a receipt in Review names them, or overpaid, or needs a look before chasing. Green = settled.", TITLE)
     put(wp, 2, 1, "Report date"); put(wp, 2, 2, REPORT_DATE, BLUE, "dd/mm/yyyy")
     header(wp, 4, ["Family ID", "Family", "Children", "Invoice no(s)", "Expected", "Received", "Balance", "Status",
                    "Receipts", "Last payment", "Days", "References used (bank)", "Needs a look"])
@@ -122,7 +153,30 @@ def write_outputs(wb, rows, roster, cfg, report_date):
     for x in rows:
         if x.tier not in AUTO_TIERS:
             for c in x.cands: in_review[c] += 1
-    order = sorted([f for f in expected if expected[f] > 0], key=lambda f: (-(expected[f] - sum(y.amount for y in recs[f])), fam_name[f]))
+    # Status, colour band and row order all come from the same figure the Status formula uses.
+    rules = rules_expected(wb, cfg)
+
+    def status_of(fid):
+        exp, got = rules.get(fid, 0.0), sum(y.amount for y in recs[fid])
+        bal = round(exp - got, 2)
+        if exp == 0:
+            return "no charge", bal
+        if got <= 0:
+            return ("in review" if in_review[fid] else "unpaid"), bal
+        if abs(bal) <= 0.5:
+            return "settled", bal
+        return ("part paid" if bal > 0 else "overpaid"), bal
+
+    def band(fid):
+        """0 red, 1 amber, 2 green: the row's colour, so the sheet reads top to bottom as chase / check / done."""
+        st, _ = status_of(fid)
+        if in_review[fid] or prior_money[fid] or st == "overpaid":
+            return 1
+        return 0 if st in ("unpaid", "part paid") else 2
+
+    RANK = {"unpaid": 0, "part paid": 1, "in review": 2, "overpaid": 3, "settled": 4, "no charge": 5}
+    order = sorted([f for f in expected if expected[f] > 0],
+                   key=lambda f: (band(f), RANK[status_of(f)[0]], -status_of(f)[1], fam_name[f]))
     inv_no = {}
     for row in wb["Families"].iter_rows(min_row=4, values_only=True):
         if row[0]: inv_no[row[0]] = row[4]
@@ -146,18 +200,16 @@ def write_outputs(wb, rows, roster, cfg, report_date):
         if in_review[fid]: look.append(f"{in_review[fid]} receipt(s) in Review name this family")
         if prior_money[fid]: look.append(f"£{prior_money[fid]:,.2f} tagged {TERM_PRIOR} looks like a {TERM_CUR} payment")
         put(wp, r, 13, "; ".join(look), GREEN)
-    # static fills (conditional formatting is often dropped on import by other spreadsheet apps)
+    # static fills (conditional formatting is often dropped on import by other spreadsheet apps),
+    # from the same band the row was sorted into
     for i, fid in enumerate(order):
-        r = 5 + i
-        got = sum(y.amount for y in recs[fid]); bal = expected[fid] - got
-        look = wp.cell(r, 13).value
-        fill = AMBER_L if look else (GREEN_L if abs(bal) <= 0.5 else RED_L)
-        for c in range(1, 14): wp.cell(r, c).fill = fill
+        fill = (RED_L, AMBER_L, GREEN_L)[band(fid)]
+        for c in range(1, 14): wp.cell(5 + i, c).fill = fill
     last_p = 4 + len(order)
     rng = f"A5:M{last_p}"
-    wp.conditional_formatting.add(rng, FormulaRule(formula=['$M5<>""'], fill=AMBER_L))
+    wp.conditional_formatting.add(rng, FormulaRule(formula=['OR($M5<>"",$H5="in review",$H5="overpaid")'], fill=AMBER_L))
     wp.conditional_formatting.add(rng, FormulaRule(formula=['OR($H5="settled",$H5="no charge")'], fill=GREEN_L))
-    wp.conditional_formatting.add(rng, FormulaRule(formula=['$G5>0.5'], fill=RED_L))
+    wp.conditional_formatting.add(rng, FormulaRule(formula=['OR($H5="unpaid",$H5="part paid")'], fill=RED_L))
     wp.conditional_formatting.add(f"K5:K{last_p}", CellIsRule(operator="greaterThan", formula=["90"], font=Font(name=F, size=10, bold=True, color="9C0006")))
     widths(wp, [10, 28, 8, 14, 11, 11, 11, 10, 8, 12, 6, 34, 48])
     wp.freeze_panes = "C5"; wp.auto_filter.ref = f"A4:M{last_p}"
@@ -185,7 +237,7 @@ def write_outputs(wb, rows, roster, cfg, report_date):
               ("Expected income (rules)", '=SUM(Position!$E$5:$E$600)', GBP), ("Received (allocated)", '=SUM(Position!$F$5:$F$600)', GBP),
               ("Outstanding", '=SUMIF(Position!$G$5:$G$600,">0")', GBP),
               ("Families settled", '=COUNTIF(Position!$H$5:$H$600,"settled")', "0"), ("Families part paid", '=COUNTIF(Position!$H$5:$H$600,"part paid")', "0"),
-              ("Families with nothing allocated", '=COUNTIF(Position!$H$5:$H$600,"unpaid")', "0"), ("Families overpaid", '=COUNTIF(Position!$H$5:$H$600,"overpaid")', "0"),
+              ("Families unpaid (no receipt seen, none in Review)", '=COUNTIF(Position!$H$5:$H$600,"unpaid")', "0"), ("Families overpaid", '=COUNTIF(Position!$H$5:$H$600,"overpaid")', "0"),
               ("Families waiting on a Review decision", '=COUNTIF(Position!$H$5:$H$600,"in review")', "0"),
               ("Families flagged 'needs a look'", '=COUNTIF(Position!$M$5:$M$600,"?*")', "0"),
               ("", None, None), ("Rule check", None, None),
@@ -198,8 +250,10 @@ def write_outputs(wb, rows, roster, cfg, report_date):
         if f: put(wsum, i, 2, f, GREEN, fmt)
     widths(wsum, [70, 18])
 
-    wb.move_sheet("Summary", offset=-(len(wb.sheetnames) - 1))   # Summary first
-    wb.move_sheet("Position", offset=-(len(wb.sheetnames) - 2))
+    # The sheets a person works come first; the settings sheets last. Rates and Terms look inert but
+    # every fee formula and config_for() read them, so they stay in the workbook.
+    front = ["Summary", "Position", "Review", "Receipts", "Families", "Children", "README", "Rates", "Terms"]
+    wb._sheets = [wb[n] for n in front if n in wb.sheetnames] + [s for s in wb._sheets if s.title not in front]
     return queue, order
 
 

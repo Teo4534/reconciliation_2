@@ -15,7 +15,7 @@ Everything below is loading, configuration, or a data quirk the generated fixtur
 - **Roster columns read by alias.** The real roster says `INVOICE N`, `REG FEE`, `SUPPLIES`, `ONEOFF REG`; the fixture says `INVOICE NUMBER`, `FEES`, `OFFICE SUPPLIES`, `REG FEES ONE OFF`. Both load. `PAID` is optional.
 - **Note columns.** Previously any column starting `Unnamed: 1`. The real file has 16,359 empty columns Excel invented, so that rule grabbed thousands. Now: unlabelled columns that hold text.
 - **Blank status rows.** The real roster leaves `Statut:` blank on rows added after the list was first drawn up (25 children, including two families with payments in the bank file). A blank status with an invoice number and a fee is now enrolled, with a note on the Children sheet.
-- **Name order.** Late additions are typed `Chloe Renard`, first name first. The house convention is `RENARD Chloe`. When no token is capitalised, the last token is the surname (plus a lower-case particle before it). A middle name never joins it. If the row shares an invoice with a properly written row whose surname equals one of its tokens, it takes that surname (`Martin Lucas` on the MARTIN invoice is a MARTIN). Rows read this way get a note so the office can confirm.
+- **Name order.** Late additions are typed `Chloe Renard`, first name first. The house convention is `RENARD Chloe`. When no token is capitalised, the last token is the surname (plus a lower-case particle before it). A middle name never joins it. If the row shares an invoice with a properly written row whose surname equals one of its tokens, it takes that surname (`Vincent Bernard` on the VINCENT invoice is a VINCENT). Rows read this way get a note so the office can confirm.
 - **Invoice number cleanup.** Leading apostrophe stripped (`'2026-999`). Stray letter in the year fixed (`2026t-999`). `?` means no invoice.
 - **Name noise.** `FRATERIE`, `ESSAIS` and similar words the office types beside a name are dropped from the surname.
 - **Unreadable bank lines stop the build.** A line with a memo but no parseable date or amount is reported, not dropped. Dates are read day first; amounts tolerate `£` and thousands separators.
@@ -49,7 +49,7 @@ Five adversarial reviewers (one lens each) plus one skeptic per finding, after t
 - Seven invoice numbers are issued to two families. Each receipt against one of them was allocated only where the memo also named the family.
 - One family is on the roster as `LI`. That is the real surname.
 - `Moreau Lea Fontaine` is ambiguous under either name order. Rename it `MOREAU Lea Fontaine` on the roster.
-- One payment from a family not on the term roster (`GARNIER`).
+- One payment from a family not on the term roster (`LEGRAND`).
 
 ## Second run: the workbook as the office keeps it
 
@@ -71,6 +71,20 @@ stopped. `preflight.py` said the same in more words. Both were right and both we
   `INVOICE NUMBER`, which the real roster never says, so that check had been silently skipped.
 - One end-to-end test wraps the generated roster in a workbook shaped like the office's (decoy
   sheets before and after, furniture above) and asserts the same ledger comes out.
+- **`namecheck.py`** scans every tracked text file, and the messages of the commits not yet on
+  `main`, for any surname on the roster or any word of a payer name in the bank export, and exits
+  non-zero on a hit. Run it before a push, with the real files as arguments. The first write-up's
+  leak was caught by a person; this is the check that should have existed. Its first run found that
+  three of the invented names used to scrub that write-up coincided with real ones on this term's
+  files. They were replaced with names the check confirms are absent.
+
+- **Position sheet grouped and recoloured.** Rows come red (unpaid, part paid), then amber (a receipt
+  in Review names the family, or overpaid, or needs a look), then green (settled), instead of by
+  amount owed with in-review families scattered among unpaid ones. The row colour used to be computed
+  from the invoiced amount while the Status formula used the fee rules, so a family the rules priced
+  £8 above its invoice was painted red under a Status of settled; both now use the rules figure, and
+  a test recomputes it and checks every row. Sheets reordered: the ones a person works first, the
+  settings sheets (Rates, Terms) last. They are still read by every fee formula and by `reconcile.py`.
 
 Same 213 roster rows, same 89 receipts, same allocations as the first run.
 
